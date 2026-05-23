@@ -1,0 +1,4 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/windows/Scripts/python.exe",
+    "python.terminal.activateEnvInTriggerTerminal": true
+}
