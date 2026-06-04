@@ -31,8 +31,9 @@ class HttpMicrophoneAdapter(HttpServiceClient, MicrophonePort):
         )
         params = {"sample_rate": request.sample_rate, "chunk_size": request.chunk_size}
         stream = await self._open_bytes_from_stream("GET", self._stream_endpoint, params=params)
-        console_log("microphone-adapter", "microphone stream output is open")
-        return MicrophoneStreamResponseDto(audio_stream=stream, sample_rate=request.sample_rate)
+        sample_rate = _sample_rate_from_stream_headers(stream, request.sample_rate)
+        console_log("microphone-adapter", "microphone stream output is open", sample_rate=sample_rate)
+        return MicrophoneStreamResponseDto(audio_stream=stream, sample_rate=sample_rate)
 
     async def start_stream(self, request: MicrophoneStreamRequestDto) -> MicrophoneStreamResponseDto:
         payload = {
@@ -49,9 +50,10 @@ class HttpMicrophoneAdapter(HttpServiceClient, MicrophonePort):
         )
         stream = await self._open_bytes_from_stream("POST", self._start_endpoint, json=payload)
         self._active_stream = stream
-        console_log("microphone-adapter", "microphone start stream output is open")
+        sample_rate = _sample_rate_from_stream_headers(stream, request.sample_rate)
+        console_log("microphone-adapter", "microphone start stream output is open", sample_rate=sample_rate)
 
-        return MicrophoneStreamResponseDto(audio_stream=stream, sample_rate=request.sample_rate)
+        return MicrophoneStreamResponseDto(audio_stream=stream, sample_rate=sample_rate)
 
     async def stop_stream(self) -> None:
         try:
@@ -75,3 +77,20 @@ class HttpMicrophoneAdapter(HttpServiceClient, MicrophonePort):
                 if close is not None:
                     await close()
                 self._active_stream = None
+
+
+def _sample_rate_from_stream_headers(stream, fallback: int) -> int:
+    headers = getattr(stream, "headers", None)
+    if headers is None:
+        return fallback
+    try:
+        value = headers.get("X-Sample-Rate")
+    except AttributeError:
+        return fallback
+    if value is None:
+        return fallback
+    try:
+        sample_rate = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return sample_rate if sample_rate > 0 else fallback

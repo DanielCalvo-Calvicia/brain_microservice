@@ -1,11 +1,13 @@
-from collections.abc import AsyncIterator
-
 import httpx
 
 from application.dtos.outbound_dtos import SpeakerPlaybackRequestDto, SpeakerPlaybackResponseDto
+from infrastructure.outbound.http.base import _stream_timeout  # no read timeout for long audio
 from application.ports.outbound_ports import SpeakerPort
 from domain.console import console_log
-from domain.errors import ExternalServiceTimeoutError, ExternalServiceUnavailableError
+from domain.errors import (
+    ExternalServiceTimeoutError,
+    ExternalServiceUnavailableError,
+)
 from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig
 
 
@@ -13,7 +15,7 @@ class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
     def __init__(
         self,
         config: HttpServiceConfig,
-        play_stream_endpoint: str = "/play/stream",
+        play_stream_endpoint: str = "/process/stream/set",
         client=None,
     ) -> None:
         super().__init__(config, client)
@@ -23,23 +25,29 @@ class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
         try:
             console_log(
                 "speaker-adapter",
-                "connecting audio stream to speaker stream input",
+                "posting TTS audio stream to speaker playback endpoint",
+                endpoint=self._play_stream_endpoint,
                 sample_rate=request.sample_rate,
                 channels=request.channels,
             )
             response = await self._client.post(
                 self._url(self._play_stream_endpoint),
-                params={"sample_rate": request.sample_rate, "channels": request.channels},
-                content=_log_audio_stream(request.audio_stream),
-                headers=self._headers({"Content-Type": "application/octet-stream"}),
+                params={
+                    "sample_rate": request.sample_rate,
+                    "channels": request.channels,
+                },
+                content=request.audio_stream,
+                headers=self._headers({"Content-Type": "application/x-ndjson"}),
+                timeout=_stream_timeout(self._config.timeout_seconds),
             )
-            self._raise_for_status(response)
-            console_log("speaker-adapter", "speaker playback response received", status_code=response.status_code)
-            message = "Playback completed"
-            if response.headers.get("content-type", "").startswith("application/json"):
-                payload = self._json(response)
-                message = payload.get("message", message)
-            console_log("speaker-adapter", "speaker playback completed", provider_message=message)
+            self._raise_for_expected_status(response)
+            message = _response_message(response)
+            console_log(
+                "speaker-adapter",
+                "speaker stream input accepted",
+                status_code=response.status_code,
+                provider_message=message,
+            )
             return SpeakerPlaybackResponseDto(success=True, message=message)
         except httpx.TimeoutException as exc:
             console_log("speaker-adapter", "speaker playback timed out", error=str(exc))
@@ -48,20 +56,21 @@ class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
             console_log("speaker-adapter", "speaker playback request failed", error=str(exc))
             raise ExternalServiceUnavailableError(self._config.service_name, str(exc)) from exc
 
-
-async def _log_audio_stream(audio_stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    chunk_count = 0
-    byte_count = 0
-    async for chunk in audio_stream:
-        if chunk:
-            chunk_count += 1
-            byte_count += len(chunk)
-            console_log(
-                "speaker-adapter",
-                "forwarding TTS audio to speaker",
-                chunk=chunk_count,
-                bytes=len(chunk),
-                total_bytes=byte_count,
-            )
-        yield chunk
-    console_log("speaker-adapter", "speaker input stream completed", chunks=chunk_count, total_bytes=byte_count)
+def _response_message(response: httpx.Response) -> str:
+    if not response.headers.get("content-type", "").startswith("application/json"):
+        return "Speaker stream input accepted"
+    try:
+        payload = response.json()
+    except ValueError:
+        return "Speaker stream input accepted"
+    if not isinstance(payload, dict):
+        return "Speaker stream input accepted"
+    message = payload.get("message")
+    if isinstance(message, str) and message:
+        return message
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data_message = data.get("message")
+        if isinstance(data_message, str) and data_message:
+            return data_message
+    return "Speaker stream input accepted"

@@ -3,7 +3,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Debug (debug env)",
+            "name": "Python: Debug (development env)",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -11,7 +11,22 @@
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
             "env": {
-                "APP_ENV": "debug"
+                "APP_ENV": "development",
+                "VSCODE_LAUNCH_PROFILE": "Python: Debug (development env)"
+            },
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Python: Run (staging env)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "env": {
+                "APP_ENV": "staging",
+                "VSCODE_LAUNCH_PROFILE": "Python: Run (staging env)"
             },
             "envFile": "${workspaceFolder}/.env"
         },
@@ -24,9 +39,66 @@
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
             "env": {
-                "APP_ENV": "production"
+                "APP_ENV": "production",
+                "VSCODE_LAUNCH_PROFILE": "Python: Run (production env)"
             },
             "envFile": "${workspaceFolder}/.env.production"
+        },
+        {
+            "name": "Debug Pytest: mock tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "args": [
+                "tests/mock",
+                "-vv"
+            ],
+            "env": {
+                "APP_ENV": "development",
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": false
+        },
+        {
+            "name": "Debug Pytest: live tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "args": [
+                "tests/live",
+                "-vv"
+            ],
+            "env": {
+                "APP_ENV": "development",
+                "PYTHONPATH": "${workspaceFolder}",
+                "RUN_LIVE_MICROSERVICE_TESTS": "1"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": false
+        },
+        {
+            "name": "Debug Current VS Code Test",
+            "type": "debugpy",
+            "request": "launch",
+            "purpose": [
+                "debug-test"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "env": {
+                "APP_ENV": "development",
+                "PYTHONPATH": "${workspaceFolder}",
+                "RUN_LIVE_MICROSERVICE_TESTS": "1"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": false
         }
     ]
 }

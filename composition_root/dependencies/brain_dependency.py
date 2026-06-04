@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI
 
-from application.services.brain_service import BrainService
+from application.services.service import BrainService
 from composition_root.config import AppConfig
 from infrastructure.inbound.http.fastapi_adapter import FastApiAdapter
 from infrastructure.outbound.http.base import HttpServiceConfig
@@ -40,7 +40,8 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
     )
     stt_adapter = HttpSTTAdapter(
         _http_config("stt", config.stt_base_url, config),
-        stream_endpoint=config.stt_stream_endpoint,
+        set_stream_endpoint=config.stt_set_stream_endpoint,
+        get_stream_endpoint=config.stt_get_stream_endpoint,
         batch_endpoint=config.stt_batch_endpoint,
     )
     tts_adapter = HttpTTSAdapter(
