@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 from fastapi import FastAPI, Query, Request
@@ -154,17 +155,15 @@ class FastApiAdapter:
             microphone_chunk_size: int = Query(1024),
             stt_silence_threshold: int = Query(150),
             stt_silence_limit_seconds: float = Query(2.0),
-            max_text_segments: int = Query(1),
+            max_text_segments: int = Query(0),
             tts_sample_rate: int = Query(24000),
             speaker_channels: int = Query(1),
         ) -> JSONResponse:
             try:
                 console_log(
                     "fastapi-adapter",
-                    "received full voice pipeline request",
+                    "received voice pipeline request - starting as background task",
                     microphone_sample_rate=microphone_sample_rate,
-                    microphone_chunk_size=microphone_chunk_size,
-                    max_text_segments=max_text_segments,
                     tts_sample_rate=tts_sample_rate,
                     speaker_channels=speaker_channels,
                 )
@@ -179,26 +178,10 @@ class FastApiAdapter:
                         speaker_channels=speaker_channels,
                     )
                 )
-                response = await self._service.run_voice_pipeline(service_request)
-                console_log(
-                    "fastapi-adapter",
-                    "full voice pipeline request completed",
-                    success=response.success,
-                    text_segments_forwarded=response.text_segments_forwarded,
-                )
-                return self._ok(
-                    "voice_pipeline",
-                    response.message or "Voice pipeline completed",
-                    {
-                        "success": response.success,
-                        "text_segments_forwarded": response.text_segments_forwarded,
-                    },
-                )
-            except BrainMicroserviceError as exc:
-                console_log("fastapi-adapter", "full voice pipeline request failed", error=str(exc))
-                return self._error("voice_pipeline", str(exc), 502)
+                asyncio.create_task(self._service.run_voice_pipeline(service_request))
+                return self._ok("voice_pipeline", "Voice pipeline started", {"started": True})
             except Exception as exc:
-                console_log("fastapi-adapter", "full voice pipeline request failed", error=str(exc))
+                console_log("fastapi-adapter", "voice pipeline request failed", error=str(exc))
                 return self._error("voice_pipeline", str(exc), 500)
 
     def _ok(self, action: str, message: str, data) -> JSONResponse:

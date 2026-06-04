@@ -2,7 +2,7 @@
 
 Technical knowledge-transfer README for the current `microphone_microservice` codebase.
 
-This project is a Windows-oriented Python FastAPI microservice that exposes a local microphone as a raw PCM byte stream over HTTP. The implementation uses a hexagonal, ports-and-adapters structure: HTTP is the inbound adapter, the application service is the framework-neutral core, and `sounddevice`/PortAudio is the outbound hardware adapter.
+This project is a Windows-oriented Python FastAPI microservice that exposes local microphone audio over HTTP streaming endpoints. Streaming responses use newline-delimited JSON events (`application/x-ndjson`) so clients can detect each logical audio output without waiting for the HTTP connection to close. The implementation uses a hexagonal, ports-and-adapters structure: HTTP is the inbound adapter, the application service is the framework-neutral core, and `sounddevice`/PortAudio is the outbound hardware adapter.
 
 Status labels used in this document:
 
@@ -13,6 +13,7 @@ Status labels used in this document:
 ## Table of Contents
 
 - [Project Overview](#project-overview)
+- [Streaming Event Contract](#streaming-event-contract)
 - [Architecture](#architecture)
 - [Repository Structure](#repository-structure)
 - [Runtime Flow](#runtime-flow)
@@ -35,13 +36,107 @@ Status labels used in this document:
 The service starts an HTTP server on `127.0.0.1:8000` and exposes endpoints for:
 
 - starting a microphone input stream;
-- returning live audio bytes as an HTTP streaming response;
+- returning live audio as an event-based HTTP streaming response;
 - returning the currently active stream;
 - stopping the stream and releasing the underlying PortAudio device;
 - reporting whether the adapter currently considers the microphone stream active;
 - returning a basic service health response.
 
-The audio adapter uses `sounddevice.RawInputStream` with `dtype="int16"`. Successful streaming responses return `application/octet-stream` chunks containing signed 16-bit PCM audio bytes. When the adapter opens a stereo device, `SoundDeviceAsyncStream` mixes the audio down to mono before yielding bytes.
+The audio adapter uses `sounddevice.RawInputStream` with `dtype="int16"`. Successful streaming responses return `application/x-ndjson` events. Audio bytes are base64-encoded in `payload.bytes_base64`. When the adapter opens a stereo device, `SoundDeviceAsyncStream` mixes the audio down to mono before yielding bytes to the HTTP event encoder.
+
+## Streaming Event Contract
+
+`POST /start` and `GET /stream` emit one complete JSON object per line using the `application/x-ndjson` media type. Every event has this shape:
+
+```json
+{"type":"partial","sequence":2,"timestamp":"2026-05-24T12:00:01Z","payload":{"bytes_base64":"cGNtLWJ5dGVz"}}
+```
+
+Required fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Event type. Clients should ignore unknown types but log them. |
+| `sequence` | integer | Monotonically increasing event number, starting at `1` for each stream response. |
+| `timestamp` | string | UTC ISO-8601 timestamp. |
+| `payload` | object | Event-specific data. |
+
+Supported event types:
+
+| Type | Payload | Meaning |
+|---|---|---|
+| `stream_started` | `{}` | Emitted once when the HTTP stream begins. |
+| `partial` | `{"bytes_base64":"..."}` | Audio bytes are being produced. |
+| `completed` | `{"reason":"completed","output":"","bytes_base64":"..."}` | One logical audio output is complete. The HTTP connection may remain open and more outputs may follow. |
+| `error` | `{"code":"audio_stream_failed","message":"Audio stream failed while producing events.","recoverable":true}` | The stream cannot continue normally. |
+
+Each audio chunk from the microphone is treated as one logical output: the service emits a `partial` event with `bytes_base64`, then a `completed` event for that same chunk. This makes completion explicit even for long-lived microphone streams.
+
+Protocol guarantees:
+
+- the first emitted event is always `stream_started`;
+- `sequence` starts at `1` and increases by exactly `1` for each event in one HTTP stream response;
+- every `partial` audio output is followed by a `completed` event for that logical output;
+- `completed` means the logical output is done, not that the HTTP connection is closing;
+- binary audio is never written as raw response bytes and is always encoded as base64 in `payload.bytes_base64`;
+- protocol state is carried in event fields, never as sentinel text such as `EOF`, `<END>`, or `[DONE]`.
+
+Completion reasons currently emitted by this service:
+
+| Reason | Meaning |
+|---|---|
+| `completed` | A microphone audio chunk has been fully emitted. |
+
+Other consumers of this contract may also see `silence`, `end_of_input`, `limit_reached`, or `manual_stop` if future stream types are added.
+
+Real example:
+
+```json
+{"type":"stream_started","sequence":1,"timestamp":"2026-05-24T12:00:00Z","payload":{}}
+{"type":"partial","sequence":2,"timestamp":"2026-05-24T12:00:01Z","payload":{"bytes_base64":"cGNtLWJ5dGVz"}}
+{"type":"completed","sequence":3,"timestamp":"2026-05-24T12:00:01Z","payload":{"reason":"completed","output":"","bytes_base64":"cGNtLWJ5dGVz"}}
+{"type":"partial","sequence":4,"timestamp":"2026-05-24T12:00:02Z","payload":{"bytes_base64":"bmV4dC1jaHVuaw=="}}
+{"type":"completed","sequence":5,"timestamp":"2026-05-24T12:00:02Z","payload":{"reason":"completed","output":"","bytes_base64":"bmV4dC1jaHVuaw=="}}
+```
+
+Client behavior:
+
+- read one JSON line at a time;
+- validate the four required fields;
+- decode `payload.bytes_base64` for audio data;
+- act immediately on `completed`;
+- stop or retry when receiving `error`;
+- never wait for connection close to decide that a logical output is complete.
+
+Minimal Python client loop:
+
+```python
+import base64
+import json
+
+import httpx
+
+with httpx.stream(
+    "POST",
+    "http://127.0.0.1:8000/start",
+    json={"sample_rate": 16000, "channels": 1, "chunk_size": 1024},
+    timeout=None,
+) as response:
+    response.raise_for_status()
+    for line in response.iter_lines():
+        event = json.loads(line)
+        event_type = event["type"]
+        payload = event["payload"]
+
+        if event_type == "partial":
+            audio_bytes = base64.b64decode(payload["bytes_base64"])
+            # Buffer or play audio_bytes.
+        elif event_type == "completed":
+            # Process the completed logical output immediately.
+            pass
+        elif event_type == "error":
+            raise RuntimeError(payload["message"])
+```
 
 ### Main responsibilities
 
@@ -147,7 +242,7 @@ sequenceDiagram
     M->>D: query_devices(), RawInputStream(...), start()
     M-->>S: stream + sample_rate
     S-->>A: stream + sample_rate
-    A-->>C: 200 StreamingResponse application/octet-stream
+    A-->>C: 200 StreamingResponse application/x-ndjson
 ```
 
 ### Dependency graph
@@ -212,8 +307,9 @@ microphone_microservice/
 | Path | Purpose |
 |---|---|
 | `main.py` | Process entry point. Calls `asyncio.run(setup())`; catches `KeyboardInterrupt`. |
-| `.env` | Local environment file containing `APP_ENV=debug` and `LOG_LEVEL=DEBUG`. Not read by current code directly. |
-| `.env.production` | Production environment file containing `APP_ENV=production` and `LOG_LEVEL=INFO`. Not read by current code directly. |
+| `.env` | Development environment file containing `APP_ENV=development` and `LOG_LEVEL=TRACE`. |
+| `.env.staging` | Staging environment file containing `APP_ENV=staging` and `LOG_LEVEL=WARN`. |
+| `.env.production` | Production environment file containing `APP_ENV=production` and `LOG_LEVEL=CRITICAL`. |
 | `requirements.windows.txt` | Declared dependencies: `fastapi`, `uvicorn`, `sounddevice`, `soundfile`, `numpy`, `pytest`. It omits `httpx`, although `tests/simple.py` imports it. |
 | `.vscode/launch.json` | VS Code debug/run profiles using the checked-in `windows/Scripts/python.exe` interpreter and `.env` files. |
 | `.vscode/settings.json` | VS Code interpreter path and terminal activation setting. |
@@ -288,7 +384,7 @@ For `/start`:
 3. `MicrophoneService.start_stream()` maps service DTO to outbound DTO.
 4. `MicrophoneAdapter.start_stream()` validates request values, selects a device, opens `sd.RawInputStream`, wraps it in `SoundDeviceAsyncStream`, and marks `started=True`.
 5. Responses are mapped back through service and inbound adapter DTOs.
-6. `FastApiAdapter` returns `StreamingResponse(response.stream, media_type="application/octet-stream")`.
+6. `FastApiAdapter` returns `StreamingResponse(event_stream_from_audio_bytes(response.stream), media_type="application/x-ndjson")`.
 
 For `/stream`:
 
@@ -325,7 +421,7 @@ Needs verification:
 
 | Type | Port | Protocol | Path/Topic | Purpose | Handler | Dependencies |
 |---|---:|---|---|---|---|---|
-| HTTP inbound | `8000` | HTTP | `POST /start` | Start microphone and stream audio bytes | `FastApiAdapter.handle_start_stream` | `MicrophoneService`, `MicrophoneAdapter`, `sounddevice`, `numpy` |
+| HTTP inbound | `8000` | HTTP | `POST /start` | Start microphone and stream audio events | `FastApiAdapter.handle_start_stream` | `MicrophoneService`, `MicrophoneAdapter`, `sounddevice`, `numpy` |
 | HTTP inbound | `8000` | HTTP | `POST /stop` | Stop active microphone stream | `FastApiAdapter.handle_stop_stream` | `MicrophoneService`, `MicrophoneAdapter`, `sounddevice` |
 | HTTP inbound | `8000` | HTTP | `GET /available` | Return whether stream is active | `FastApiAdapter.handle_check_availability` | `MicrophoneService`, `MicrophoneAdapter` |
 | HTTP inbound | `8000` | HTTP | `GET /stream` | Stream the already active microphone iterator | `FastApiAdapter.handle_get_stream` | `MicrophoneService`, `MicrophoneAdapter`, `sounddevice`, `numpy` |
@@ -346,12 +442,12 @@ No GraphQL, WebSocket, MQTT, serial, gRPC, message queue, webhook, cron, schedul
 | Port | `8000` |
 | Protocol | HTTP |
 | Path | `/start` |
-| Purpose | Open a local microphone stream and return it immediately as raw bytes. |
+| Purpose | Open a local microphone stream and return it immediately as NDJSON audio events. |
 | Authentication | None. |
 | Handler/module | `infrastructure/inbound/http/fastapi_adapter.py::handle_start_stream` |
 | Internal service | `application/services/service.py::MicrophoneService.start_stream` |
 | Outbound dependency | `infrastructure/outbound/windows_sounddevice.py::MicrophoneAdapter.start_stream` |
-| Media type | `application/octet-stream` on success. |
+| Media type | `application/x-ndjson` on success. |
 | Side effects | Opens a `sounddevice.RawInputStream`, starts the device stream, stores adapter state, writes telemetry to stdout. |
 | Required environment variables | None in current code. |
 | Timeout/retry behavior | No HTTP timeout configured in the service. Hardware open retries once with hardware default sample rate, then possibly retries mono as stereo. |
@@ -371,22 +467,23 @@ Example request:
 ```bash
 curl -N -X POST http://127.0.0.1:8000/start \
   -H "Content-Type: application/json" \
-  -d '{"sample_rate":16000,"channels":1,"chunk_size":1024}' \
-  --output microphone.raw
+  -d '{"sample_rate":16000,"channels":1,"chunk_size":1024}'
 ```
 
 Example success response:
 
 ```http
 HTTP/1.1 200 OK
-content-type: application/octet-stream
+content-type: application/x-ndjson
 x-sample-rate: 16000
 x-action: start_stream
 x-status: success
 x-message: Microphone stream started successfully
 x-timestamp: 1779280000.123
 
-<streaming int16 PCM bytes>
+{"type":"stream_started","sequence":1,"timestamp":"2026-05-24T12:00:00Z","payload":{}}
+{"type":"partial","sequence":2,"timestamp":"2026-05-24T12:00:01Z","payload":{"bytes_base64":"cGNtLWJ5dGVz"}}
+{"type":"completed","sequence":3,"timestamp":"2026-05-24T12:00:01Z","payload":{"reason":"completed","output":"","bytes_base64":"cGNtLWJ5dGVz"}}
 ```
 
 Example failure response:
@@ -494,7 +591,7 @@ Important semantic note: this endpoint reports whether the microservice has an a
 | Port | `8000` |
 | Protocol | HTTP |
 | Path | `/stream` |
-| Purpose | Return the existing active microphone stream as raw bytes. |
+| Purpose | Return the existing active microphone stream as NDJSON audio events. |
 | Authentication | None. |
 | Handler/module | `FastApiAdapter.handle_get_stream` |
 | Dependencies triggered | `MicrophoneService.mic_stream`, `MicrophoneAdapter.mic_stream`, existing `SoundDeviceAsyncStream` |
@@ -505,21 +602,23 @@ Important semantic note: this endpoint reports whether the microservice has an a
 Example request:
 
 ```bash
-curl -N http://127.0.0.1:8000/stream --output microphone.raw
+curl -N http://127.0.0.1:8000/stream
 ```
 
 Example success response:
 
 ```http
 HTTP/1.1 200 OK
-content-type: application/octet-stream
+content-type: application/x-ndjson
 x-sample-rate: 16000
 x-action: get_stream
 x-status: success
 x-message: Microphone stream retrieved successfully
 x-timestamp: 1779280000.123
 
-<streaming int16 PCM bytes>
+{"type":"stream_started","sequence":1,"timestamp":"2026-05-24T12:00:00Z","payload":{}}
+{"type":"partial","sequence":2,"timestamp":"2026-05-24T12:00:01Z","payload":{"bytes_base64":"cGNtLWJ5dGVz"}}
+{"type":"completed","sequence":3,"timestamp":"2026-05-24T12:00:01Z","payload":{"reason":"completed","output":"","bytes_base64":"cGNtLWJ5dGVz"}}
 ```
 
 Failure behavior:
@@ -595,8 +694,8 @@ For rebuilding or integrating the system, preserve this control surface first:
 | Operation | Method | URL | Request | Success response | Notes |
 |---|---|---|---|---|---|
 | Health | `GET` | `http://127.0.0.1:8000/health` | none | JSON envelope with `data: null` | Does not verify microphone hardware. |
-| Start stream | `POST` | `http://127.0.0.1:8000/start` | `{"sample_rate":16000,"channels":1,"chunk_size":1024}` | `application/octet-stream` streaming int16 PCM bytes | Opens hardware and sets active state. |
-| Get active stream | `GET` | `http://127.0.0.1:8000/stream` | none | `application/octet-stream` streaming int16 PCM bytes | Requires prior `/start`. |
+| Start stream | `POST` | `http://127.0.0.1:8000/start` | `{"sample_rate":16000,"channels":1,"chunk_size":1024}` | `application/x-ndjson` streaming audio events | Opens hardware and sets active state. |
+| Get active stream | `GET` | `http://127.0.0.1:8000/stream` | none | `application/x-ndjson` streaming audio events | Requires prior `/start`. |
 | Stop stream | `POST` | `http://127.0.0.1:8000/stop` | `{}` | JSON envelope with `data: true` | Idempotent when inactive. |
 | Active flag | `GET` | `http://127.0.0.1:8000/available` | none | JSON envelope with boolean `data` | Reports active stream state, not physical availability. |
 
@@ -604,11 +703,11 @@ Default runtime:
 
 - Host: `127.0.0.1`
 - Port: `8000`
-- Audio format: signed 16-bit PCM bytes
+- Audio format: signed 16-bit PCM bytes encoded as base64 in event payloads
 - Default sample rate: `16000`
 - Default channels requested: `1`
 - Default chunk size: `1024` frames
-- Success streaming media type: `application/octet-stream`
+- Success streaming media type: `application/x-ndjson`
 - Authentication: none
 
 ## Data Model
@@ -714,12 +813,25 @@ No cache layer exists. The only retained state is the active microphone stream a
 
 ### Environment variables
 
-The repository contains `.env` and `.env.production`, and VS Code profiles load them, but the Python runtime code does not read environment variables directly. Host, port, fallback sample rate, and target microphone keywords are hardcoded in the composition root.
+`.vscode/launch.json` is the source of truth for runtime environment selection. The real entry point is `main.py`, which calls `composition_root.setup.setup()` to build the FastAPI dependency graph and start Uvicorn on `127.0.0.1:8000`.
+
+`composition_root/runtime/environment.py` resolves the application environment from VS Code launch profile configuration and the runtime process environment. Supported values are `development`, `staging`, and `production`. Missing or invalid values fall back to `development`.
+
+Resolution precedence is:
+
+1. Process environment: `APP_ENV`, then `VSCODE_ENV`.
+2. Selected VS Code launch profile `env`: `APP_ENV`, then `VSCODE_ENV`.
+3. Selected VS Code launch profile `envFile`: `APP_ENV`, then `VSCODE_ENV`.
+4. Safe default: `development`.
+
+The selected launch profile is identified by `VSCODE_LAUNCH_PROFILE` when present. If it is missing, the resolver matches a launch profile with the same environment value, then falls back to the first launch profile.
 
 | Variable | Required | Default | Purpose | Example |
 |---|---|---|---|---|
-| `APP_ENV` | No | Not used by code | Loaded by VS Code launch profiles; currently not consumed by application logic. | `debug` or `production` |
-| `LOG_LEVEL` | No | Not used by code | Present in env files; currently not passed to Uvicorn in `main.py` setup. | `DEBUG` or `INFO` |
+| `APP_ENV` | No | `development` | Primary application environment value used by the runtime resolver. | `development`, `staging`, `production` |
+| `VSCODE_ENV` | No | `development` | Secondary application environment value if `APP_ENV` is absent. | `development` |
+| `VSCODE_LAUNCH_PROFILE` | No | First matching profile | Names the active VS Code launch profile for fallback resolution. | `Python: Run (development env)` |
+| `LOG_LEVEL` | No | Environment-derived | Present in env files for operator clarity; the custom logger filters by `APP_ENV`. | `TRACE`, `WARN`, `CRITICAL` |
 
 Inferred desirable future variables:
 
@@ -734,9 +846,10 @@ Inferred desirable future variables:
 
 | File | Purpose | Runtime effect |
 |---|---|---|
-| `.env` | Local values: `APP_ENV=debug`, `LOG_LEVEL=DEBUG`. | Used by VS Code debug profile only. |
-| `.env.production` | Production values: `APP_ENV=production`, `LOG_LEVEL=INFO`. | Used by VS Code run profile only. |
-| `.vscode/launch.json` | Defines debug and production launch configs. | Sets interpreter and env file for VS Code. |
+| `.env` | Development values: `APP_ENV=development`, `LOG_LEVEL=TRACE`. | Used by the development VS Code profile. |
+| `.env.staging` | Staging values: `APP_ENV=staging`, `LOG_LEVEL=WARN`. | Used by the staging VS Code profile. |
+| `.env.production` | Production values: `APP_ENV=production`, `LOG_LEVEL=CRITICAL`. | Used by the production VS Code profile. |
+| `.vscode/launch.json` | Defines development, staging, and production launch configs. | Sets interpreter, `APP_ENV`, `VSCODE_LAUNCH_PROFILE`, and env file for VS Code. |
 | `.vscode/settings.json` | Points VS Code to `windows/Scripts/python.exe`. | Editor/runtime convenience. |
 | `requirements.windows.txt` | Declares install dependencies. | Used manually with `pip install -r`. |
 
@@ -747,6 +860,28 @@ None. The current service has no API keys, database credentials, tokens, certifi
 ### Mandatory vs optional settings
 
 No mandatory environment variables exist in current code. A working microphone device and a Python environment with native audio dependencies are mandatory runtime prerequisites.
+
+### Launch profile environment mapping
+
+| VS Code profile | Environment |
+|---|---|
+| `Python: Run (development env)` | `development` |
+| `Python: Run (staging env)` | `staging` |
+| `Python: Run (production env)` | `production` |
+
+To add a new launch profile, copy an existing profile in `.vscode/launch.json`, set `APP_ENV` to one of the supported environment values, set `VSCODE_LAUNCH_PROFILE` to the profile name, and point `envFile` to the matching `.env*` file. Adding a new environment value requires updating `SUPPORTED_ENVIRONMENTS` and `ENVIRONMENT_MIN_LEVEL`.
+
+### Application logging
+
+`composition_root/runtime/logger.py` is the centralized logger for project logs. Each log line includes a UTC timestamp, resolved environment, log level, module/scope name, message, and optional context fields.
+
+| Environment | Custom application logs shown |
+|---|---|
+| `development` | `trace`, `info`, `warn`, `error`, `critical` |
+| `staging` | `warn`, `error`, `critical` |
+| `production` | `critical` only |
+
+FastAPI and Uvicorn logging is not filtered by the custom application logger. Uvicorn request logs, startup logs, shutdown logs, and server errors remain visible in `development`, `staging`, and `production`.
 
 ## Build & Deployment
 
@@ -912,7 +1047,7 @@ These counters are printed to stdout and are not persisted.
 | Device discovery | No matching or default input device | Raises `RuntimeError("No microphone devices available")`; HTTP 500 JSON. |
 | Sample rate | Requested rate unsupported | Retries with hardware default rate. |
 | Channel count | Mono unsupported | Retries stereo if originally mono. |
-| Stream read | `RawInputStream.read()` raises | `SoundDeviceAsyncStream` marks itself closed and stops iteration. |
+| Stream read | `RawInputStream.read()` raises | `SoundDeviceAsyncStream` marks itself closed and raises an error so the HTTP event encoder can emit an `error` event. |
 | Stop | `RawInputStream.stop()` or `.close()` raises | Raises wrapped `RuntimeError`; HTTP 500 JSON. |
 | No active stream | `/stream` before `/start` | Raises `RuntimeError`; HTTP 500 JSON. |
 | Port conflict | `127.0.0.1:8000` already used | Uvicorn startup fails. No custom recovery. |
@@ -932,7 +1067,7 @@ No HTTP client retry, exponential backoff, queue retry, or background recovery l
 
 HTTP route handlers catch broad `Exception` and return JSON envelopes with HTTP 500. There is no specialized 400 response for invalid client input, no global exception handler, and no structured logging.
 
-Streaming errors inside `SoundDeviceAsyncStream.__anext__()` are swallowed by converting all exceptions into `StopAsyncIteration`. That prevents error propagation to the HTTP layer but can hide hardware failures.
+Streaming errors inside `SoundDeviceAsyncStream.__anext__()` are propagated to the HTTP event encoder, which emits an `error` event with a stable machine-readable code and recoverability flag.
 
 ### Recovery mechanisms
 
@@ -962,7 +1097,7 @@ No secrets are used. `.env` files contain non-secret runtime labels only.
 
 ### Sensitive flows
 
-The sensitive flow is microphone capture. `/start` and `/stream` expose live microphone audio as raw bytes.
+The sensitive flow is microphone capture. `/start` and `/stream` expose live microphone audio as base64-encoded bytes inside NDJSON events.
 
 ### Exposed attack surface
 
@@ -1025,8 +1160,8 @@ Recommended hardening for derived projects:
   - `sample_rate=16000`
   - `channels=1`
   - `chunk_size=1024`
-- Streaming response media type: `application/octet-stream`.
-- Streaming bytes format: signed 16-bit PCM.
+- Streaming response media type: `application/x-ndjson`.
+- Streaming audio format: signed 16-bit PCM bytes encoded in `payload.bytes_base64`.
 - Response headers expected by existing clients:
   - `X-Sample-Rate`
   - `X-Action`
@@ -1123,4 +1258,3 @@ Recommended hardening for derived projects:
 - Device default sample rate should be trusted if the requested rate fails.
 - Stereo can be downmixed to mono by averaging `int16` samples per frame.
 - Stopping when inactive should still return success.
-

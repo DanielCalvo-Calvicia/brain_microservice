@@ -29,9 +29,8 @@
   4. get TTS stream input by connecting STT text stream output to TTS stream set endpoint;
   5. get TTS stream output;
   6. connect TTS stream output to speaker stream input.
-- Updated startup behavior: the same stream pipeline now runs as a mandatory preflight before the inbound FastAPI adapter is created and before Uvicorn starts listening.
-- Updated readiness behavior: startup preflight polls until all microservices are active, then loads all pipeline streams before executing the pipeline.
-- Updated runtime ownership: after startup stream probes pass, the brain starts an internal pipeline supervisor before opening the inbound API. The pipeline no longer depends on an API request to become active.
+- Updated startup behavior: startup preflight polls health/availability until all microservices are active, then starts the mandatory stream pipeline before opening the inbound API.
+- Updated runtime ownership: the startup stream pipeline is compulsory and has no enable/disable config flag.
 
 ## Domain Layer Work
 
@@ -55,7 +54,6 @@
   - `flow2_stream_outputs/stream_outputs.py`: get stream outputs from external microservices.
   - `flow3_stream_inputs/stream_inputs.py`: build stream inputs for external microservices.
   - `flow4_attach/stream_attachment.py`: attach mic -> STT -> TTS -> speaker streams.
-  - `flow4_attach/startup_probes.py`: verify stream availability before opening inbound API.
   - `shared/microphone_lifecycle.py`: stop microphone through the API.
   - `shared/stream_helpers.py`: shared async stream helpers.
   - `service.py`: public service facade and flow composition.
@@ -77,7 +75,7 @@
   - `PROVIDER_TIMEOUT_SECONDS=30`
   - `PROVIDER_API_KEY=`
   - per-service base URLs and endpoint paths.
-  - mandatory startup preflight flags and timeout.
+  - startup health preflight flags and timeout.
   - microservice readiness polling interval.
 
 ## Tests
@@ -93,7 +91,7 @@
 - STT stream responses are assumed to be SSE lines using `data: <text>`.
 - TTS playback uses the documented decoupled set/get flow because the existing `.env` points at `/process/stream/get`.
 - The requested final step said "connect TTS stream out to mic stream in"; docs show no microphone stream input, so implementation connects TTS stream output to speaker stream input.
-- The brain service now refuses to open its inbound API unless all external microservices are active and the startup stream pipeline passes.
+- The brain service now refuses to open its inbound API unless all external microservices report healthy/available and startup stream attachment begins.
 - Authentication is represented as a shared bearer token via `PROVIDER_API_KEY`; no per-service auth scheme was documented.
 
 ## Completion Status

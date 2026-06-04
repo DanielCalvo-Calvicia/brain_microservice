@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from typing import Protocol
 
 from application.dtos.outbound_dtos import (
     ExternalHealthResponseDto,
@@ -8,7 +8,8 @@ from application.dtos.outbound_dtos import (
     SpeakerPlaybackResponseDto,
     STTBatchRequestDto,
     STTBatchResponseDto,
-    STTStreamRequestDto,
+    STTSetStreamRequestDto,
+    STTTextStreamRequestDto,
     STTStreamResponseDto,
     TTSAudioStreamRequestDto,
     TTSAudioStreamResponseDto,
@@ -17,51 +18,44 @@ from application.dtos.outbound_dtos import (
 )
 
 
-class HealthCheckPort(ABC):
-    @abstractmethod
+class HealthCheckPort(Protocol):
     async def check_health(self) -> ExternalHealthResponseDto:
-        pass
+        ...
 
 
-class MicrophonePort(HealthCheckPort):
-    @abstractmethod
+class MicrophonePort(HealthCheckPort, Protocol):
     async def start_stream(self, request: MicrophoneStreamRequestDto) -> MicrophoneStreamResponseDto:
-        pass
+        ...
 
-    @abstractmethod
     async def get_stream(self, request: MicrophoneStreamRequestDto) -> MicrophoneStreamResponseDto:
-        pass
+        ...
 
-    @abstractmethod
     async def stop_stream(self) -> None:
-        pass
+        ...
 
 
-class STTPort(HealthCheckPort):
-    @abstractmethod
-    async def process_stream(self, request: STTStreamRequestDto) -> STTStreamResponseDto:
-        pass
+class STTPort(HealthCheckPort, Protocol):
+    async def set_stream(self, request: STTSetStreamRequestDto) -> None:
+        ...
 
-    @abstractmethod
+    async def get_stream(self, request: STTTextStreamRequestDto) -> STTStreamResponseDto:
+        ...
+
     async def process_batch(self, request: STTBatchRequestDto) -> STTBatchResponseDto:
-        pass
+        ...
 
 
-class TTSPort(HealthCheckPort):
-    @abstractmethod
+class TTSPort(HealthCheckPort, Protocol):
     async def set_stream(self, request: TTSSetStreamRequestDto) -> None:
-        pass
+        ...
 
-    @abstractmethod
     async def set_text_stream(self, request: TTSTextStreamRequestDto) -> None:
-        pass
+        ...
 
-    @abstractmethod
     async def get_stream(self, request: TTSAudioStreamRequestDto) -> TTSAudioStreamResponseDto:
-        pass
+        ...
 
 
-class SpeakerPort(HealthCheckPort):
-    @abstractmethod
+class SpeakerPort(HealthCheckPort, Protocol):
     async def play_stream(self, request: SpeakerPlaybackRequestDto) -> SpeakerPlaybackResponseDto:
-        pass
+        ...

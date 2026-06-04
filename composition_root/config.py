@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from composition_root.environment import resolve_runtime_environment
+
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
@@ -15,7 +17,8 @@ class AppConfig:
     microphone_start_endpoint: str
     microphone_stop_endpoint: str
     stt_base_url: str
-    stt_stream_endpoint: str
+    stt_set_stream_endpoint: str
+    stt_get_stream_endpoint: str
     stt_batch_endpoint: str
     tts_base_url: str
     tts_set_stream_endpoint: str
@@ -25,18 +28,14 @@ class AppConfig:
     startup_preflight_enabled: bool
     startup_preflight_timeout_seconds: float
     microservice_ready_poll_interval_seconds: float
-    stream_probe_timeout_seconds: float
-    startup_preflight_max_text_segments: int
-    startup_internal_pipeline_enabled: bool
-    startup_internal_pipeline_max_text_segments: int
-    startup_internal_pipeline_restart_delay_seconds: float
 
 
 def load_config() -> AppConfig:
+    runtime_environment = resolve_runtime_environment()
     return AppConfig(
-        app_env=os.getenv("APP_ENV", "debug"),
+        app_env=runtime_environment.value,
         service_host=os.getenv("SERVICE_HOST", "127.0.0.1"),
-        service_port=_int_env("SERVICE_PORT", 8000),
+        service_port=_int_env("SERVICE_PORT", 7999),
         provider_name=os.getenv("PROVIDER_NAME", "local"),
         provider_timeout_seconds=_float_env("PROVIDER_TIMEOUT_SECONDS", 30.0),
         provider_api_key=os.getenv("PROVIDER_API_KEY", ""),
@@ -57,10 +56,15 @@ def load_config() -> AppConfig:
             "/stop",
         ),
         stt_base_url=_base_url("STT_BASE_URL", "http://127.0.0.1:8001"),
-        stt_stream_endpoint=_endpoint(
-            "STT_STREAM_ENDPOINT",
-            "http://127.0.0.1:8001/process/stream",
-            "/process/stream",
+        stt_set_stream_endpoint=_endpoint(
+            "STT_SET_STREAM_ENDPOINT",
+            "http://127.0.0.1:8001/process/stream/set",
+            "/process/stream/set",
+        ),
+        stt_get_stream_endpoint=_endpoint(
+            "STT_GET_STREAM_ENDPOINT",
+            "http://127.0.0.1:8001/process/stream/get",
+            "/process/stream/get",
         ),
         stt_batch_endpoint=_endpoint(
             "STT_BATCH_ENDPOINT",
@@ -80,21 +84,14 @@ def load_config() -> AppConfig:
         ),
         speaker_base_url=_base_url("SPEAKER_BASE_URL", "http://127.0.0.1:8003"),
         speaker_play_stream_endpoint=_endpoint(
-            "SPEAKER_STREAM_ENDPOINT",
-            "http://127.0.0.1:8003/play/stream",
-            "/play/stream",
+            "SPEAKER_PLAY_STREAM_ENDPOINT",
+            "http://127.0.0.1:8003/process/stream/set",
+            "/process/stream/set",
+            fallback_env_name="SPEAKER_STREAM_ENDPOINT",
         ),
         startup_preflight_enabled=_bool_env("STARTUP_PREFLIGHT_ENABLED", True),
         startup_preflight_timeout_seconds=_float_env("STARTUP_PREFLIGHT_TIMEOUT_SECONDS", 60.0),
         microservice_ready_poll_interval_seconds=_float_env("MICROSERVICE_READY_POLL_INTERVAL_SECONDS", 2.0),
-        stream_probe_timeout_seconds=_float_env("STREAM_PROBE_TIMEOUT_SECONDS", 10.0),
-        startup_preflight_max_text_segments=_int_env("STARTUP_PREFLIGHT_MAX_TEXT_SEGMENTS", 1),
-        startup_internal_pipeline_enabled=_bool_env("STARTUP_INTERNAL_PIPELINE_ENABLED", True),
-        startup_internal_pipeline_max_text_segments=_int_env("STARTUP_INTERNAL_PIPELINE_MAX_TEXT_SEGMENTS", 0),
-        startup_internal_pipeline_restart_delay_seconds=_float_env(
-            "STARTUP_INTERNAL_PIPELINE_RESTART_DELAY_SECONDS",
-            5.0,
-        ),
     )
 
 
@@ -126,8 +123,12 @@ def _base_url(name: str, default: str) -> str:
     return _origin(default)
 
 
-def _endpoint(name: str, default_url: str, fallback_path: str) -> str:
-    value = os.getenv(name, default_url)
+def _endpoint(name: str, default_url: str, fallback_path: str, fallback_env_name: str | None = None) -> str:
+    value = os.getenv(name)
+    if value is None and fallback_env_name is not None:
+        value = os.getenv(fallback_env_name)
+    if value is None:
+        value = default_url
     if value.startswith("http://") or value.startswith("https://"):
         origin = _origin(default_url)
         if value.startswith(origin):

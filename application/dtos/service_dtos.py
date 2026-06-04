@@ -52,7 +52,7 @@ class VoicePipelineServiceRequestDto:
     microphone_chunk_size: int = 1024
     stt_silence_threshold: int = 150
     stt_silence_limit_seconds: float = 2.0
-    max_text_segments: int = 1
+    max_text_segments: int = 0
     tts_sample_rate: int = 24000
     speaker_channels: int = 1
 

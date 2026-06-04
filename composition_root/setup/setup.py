@@ -1,5 +1,5 @@
 import asyncio
-import os
+from pathlib import Path
 
 import uvicorn
 
@@ -12,22 +12,32 @@ except ImportError:  # pragma: no cover - dotenv is optional for minimal environ
 from composition_root.config import load_config
 from composition_root.containers.container import Container
 from composition_root.dependencies.brain_dependency import generate_brain_core_dependency, generate_brain_dependency_from_core
-from composition_root.setup.pipeline_supervisor import start_internal_pipeline_supervisor
+from composition_root.environment import LaunchEnvironmentSummary, apply_launch_environment
 from composition_root.setup.preflight import run_startup_preflight
-from domain.console import console_log
+from composition_root.setup.startup_pipeline import start_startup_pipeline
+from domain.console import configure_logger, console_log
 
 
 NAME = "Brain Microservice"
 
 
 async def setup() -> None:
-    console_log("setup", "loading environment")
-    _load_env_file()
+    launch_summary = _load_launch_environment()
+    dotenv_path = None if launch_summary.selected_profile else _load_env_file()
     config = load_config()
+    configure_logger(config.app_env)
+    console_log(
+        "setup",
+        "environment loaded",
+        launch_profile=launch_summary.selected_profile,
+        launch_env_file=launch_summary.env_file,
+        dotenv_path=dotenv_path,
+    )
     console_log(
         "setup",
         "configuration loaded",
         app_env=config.app_env,
+        launch_profile=launch_summary.selected_profile,
         host=config.service_host,
         port=config.service_port,
         provider=config.provider_name,
@@ -47,17 +57,13 @@ async def setup() -> None:
         raise
 
     console_log("setup", "startup preflight passed; opening inbound adapter")
-    background_tasks = []
-    pipeline_task = start_internal_pipeline_supervisor(core_dependency.service, config)
-    if pipeline_task is not None:
-        background_tasks.append(pipeline_task)
-
+    startup_pipeline_task = start_startup_pipeline(core_dependency.service)
     brain_dependency = generate_brain_dependency_from_core(core_dependency)
     container = Container(
         name=NAME,
         config=config,
         brain_dependency=brain_dependency,
-        background_tasks=tuple(background_tasks),
+        background_tasks=(startup_pipeline_task,),
     )
     app = container.brain_dependency.adapter_inbound.get_app
 
@@ -78,16 +84,19 @@ async def setup() -> None:
         await _cleanup(container)
 
 
-def _load_env_file() -> None:
+def _load_env_file() -> str | None:
     if find_dotenv is None or load_dotenv is None:
-        console_log("setup", "python-dotenv is not installed; skipping .env loading")
-        return
+        return None
     dotenv_path = find_dotenv(".env")
     if dotenv_path:
-        console_log("setup", "loading .env file", path=dotenv_path)
         load_dotenv(dotenv_path)
-    else:
-        console_log("setup", ".env file not found")
+        return dotenv_path
+    return None
+
+
+def _load_launch_environment() -> LaunchEnvironmentSummary:
+    workspace_root = Path(__file__).resolve().parents[2]
+    return apply_launch_environment(workspace_root)
 
 
 async def _cleanup(container: Container) -> None:

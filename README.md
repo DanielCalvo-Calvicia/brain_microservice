@@ -1,281 +1,220 @@
 # Brain Microservice
 
-Master/orchestrator service for connecting the external microphone, STT, TTS, and speaker microservices through HTTP streams.
+Master/orchestrator service for connecting external microphone, STT, TTS, and speaker microservices through HTTP streams.
+
+The brain service does not capture audio, transcribe speech, synthesize speech, or play audio itself. It coordinates the other services and owns the voice pipeline wiring.
 
 ## Index
 
 1. [What This Service Does](#1-what-this-service-does)
-2. [External Services Used](#2-external-services-used)
-3. [Startup Flow](#3-startup-flow)
-4. [Dependency Wiring Flow](#4-dependency-wiring-flow)
-5. [HTTP API Flow](#5-http-api-flow)
-6. [Full Voice Pipeline Flow](#6-full-voice-pipeline-flow)
-7. [Detailed Pipeline Steps](#7-detailed-pipeline-steps)
-8. [Console Logs](#8-console-logs)
-9. [Configuration](#9-configuration)
-10. [Run The Service](#10-run-the-service)
-11. [Run Tests](#11-run-tests)
+2. [External Services](#2-external-services)
+3. [Architecture](#3-architecture)
+4. [HTTP API](#4-http-api)
+5. [Voice Pipeline](#5-voice-pipeline)
+6. [Startup Flow](#6-startup-flow)
+7. [Configuration](#7-configuration)
+8. [Runtime Environments And Logs](#8-runtime-environments-and-logs)
+9. [Run The Service](#9-run-the-service)
+10. [Run Tests](#10-run-tests)
+11. [Repository Map](#11-repository-map)
 12. [Assumptions](#12-assumptions)
 
 ## 1. What This Service Does
 
-This repository is the brain/master service. It does not implement microphone capture, speech-to-text, text-to-speech, or speaker playback internally.
-
-Instead, it orchestrates separately running microservices:
-
-- microphone service: captures audio and exposes a byte stream;
-- STT service: receives audio bytes and emits text;
-- TTS service: receives text and emits audio bytes;
-- speaker service: receives audio bytes and plays them.
-
-The important boundary is:
+The service sits between an inbound HTTP API and four outbound HTTP integrations:
 
 ```text
-Inbound HTTP adapter -> Application service -> Outbound HTTP adapters -> External microservices
+Inbound HTTP adapter -> BrainService -> outbound HTTP adapters -> external microservices
 ```
 
-## 2. External Services Used
+It supports:
+
+- integration health checks;
+- raw audio batch transcription through STT;
+- microphone stream transcription through STT;
+- text playback through TTS and speaker;
+- full microphone -> STT -> TTS -> speaker voice pipeline.
+
+The application layer depends on ports/interfaces. FastAPI, `httpx`, URLs, and HTTP status handling stay in the infrastructure and composition layers.
+
+## 2. External Services
 
 | Service | Default URL | Main Purpose |
 | --- | --- | --- |
-| Microphone | `http://127.0.0.1:8000` | Starts and exposes microphone audio stream. |
-| STT | `http://127.0.0.1:8001` | Converts microphone audio stream into text. |
-| TTS | `http://127.0.0.1:8002` | Converts text stream into audio stream. |
-| Speaker | `http://127.0.0.1:8003` | Plays audio stream through the speaker. |
+| Microphone | `http://127.0.0.1:8000` | Starts, stops, and exposes microphone audio streams. |
+| STT | `http://127.0.0.1:8001` | Converts audio streams or audio bytes into text. |
+| TTS | `http://127.0.0.1:8002` | Converts text into audio streams. |
+| Speaker | `http://127.0.0.1:8003` | Plays audio streams. |
 
-## 3. Startup Flow
+## 3. Architecture
 
-When the program starts:
-
-1. `main.py` calls `asyncio.run(setup())`.
-2. `composition_root/setup/setup.py` loads `.env` if it exists.
-3. Runtime configuration is parsed from environment variables.
-4. Outbound dependencies are built first.
-5. The mandatory startup preflight runs before the inbound adapter opens.
-6. The preflight waits until all external microservices are fully loaded.
-7. The preflight probes every stream with bounded test data.
-8. The preflight verifies microphone, STT, TTS, and speaker streams work.
-9. After preflight passes, the internal voice pipeline supervisor starts.
-10. The supervisor keeps an internal pipeline active and restarts it if it completes or fails.
-11. Only after the internal supervisor is started, the FastAPI inbound adapter is created.
-12. Uvicorn starts the HTTP server.
-13. The service waits for incoming requests.
-
-Entry point:
+Main runtime path:
 
 ```text
 main.py
   -> composition_root.setup.setup()
-  -> load config
-  -> build outbound adapters
-  -> wait until all microservices are ready
-  -> probe all streams with bounded data
-  -> start internal pipeline supervisor
-  -> create inbound FastAPI adapter
-  -> start uvicorn
+  -> composition_root.config.load_config()
+  -> composition_root.dependencies.brain_dependency
+  -> application.services.service.BrainService
+  -> infrastructure.inbound.http.fastapi_adapter.FastApiAdapter
+  -> uvicorn
 ```
 
-## 4. Dependency Wiring Flow
-
-The composition root creates the concrete objects:
-
-1. `HttpMicrophoneAdapter`
-2. `HttpSTTAdapter`
-3. `HttpTTSAdapter`
-4. `HttpSpeakerAdapter`
-5. `BrainService`
-6. startup preflight
-7. `FastAPI`
-8. `FastApiAdapter`
-
-The application service receives only ports/interfaces. It does not know about FastAPI, `httpx`, URLs, or HTTP status codes.
+Dependency wiring:
 
 ```text
 FastApiAdapter
   -> BrainService
-      -> MicrophonePort
-      -> STTPort
-      -> TTSPort
-      -> SpeakerPort
-          -> concrete HTTP adapters
+      -> VoicePipelineFlow
+      -> MicrophonePort -> HttpMicrophoneAdapter
+      -> STTPort       -> HttpSTTAdapter
+      -> TTSPort       -> HttpTTSAdapter
+      -> SpeakerPort   -> HttpSpeakerAdapter
 ```
 
-## 5. HTTP API Flow
-
-The brain service exposes these endpoints:
+## 4. HTTP API
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Checks that the brain service is alive. |
-| `GET` | `/integrations/health` | Checks external service availability. |
+| `GET` | `/integrations/health` | Checks microphone, STT, TTS, and speaker availability. |
 | `POST` | `/stt/batch` | Sends raw audio bytes to STT batch transcription. |
-| `POST` | `/tts/play` | Sends text to TTS and plays resulting audio through speaker. |
-| `POST` | `/voice/transcribe` | Starts mic, sends mic stream to STT, returns text segments. |
-| `POST` | `/voice/pipeline` | Runs the full mic -> STT -> TTS -> speaker pipeline. |
+| `POST` | `/tts/play` | Sends UTF-8 text to TTS and plays the resulting audio through speaker. |
+| `POST` | `/voice/transcribe` | Starts microphone, sends mic stream to STT, and returns text segments. |
+| `POST` | `/voice/pipeline` | Runs microphone -> STT -> TTS -> speaker. |
 
-## Application Service File Map
+Example full pipeline call:
 
-The application service is split into small files so the runtime behavior is easier to follow:
-
-| File | Responsibility |
-| --- | --- |
-| `application/services/brain_service.py` | Public compatibility import for `BrainService`. |
-| `application/services/brain/service.py` | Composes the Flow1-Flow4 objects into the public `BrainService`. |
-| `application/services/brain/flow1_health/health_status.py` | Flow1: checks health status of microphone, STT, TTS, and speaker microservices. |
-| `application/services/brain/flow2_stream_outputs/stream_outputs.py` | Flow2: gets stream outputs from microphone, STT, and TTS microservices. |
-| `application/services/brain/flow3_stream_inputs/stream_inputs.py` | Flow3: builds stream input DTOs for STT, TTS, and speaker. |
-| `application/services/brain/flow4_attach/stream_attachment.py` | Flow4: attaches mic -> STT -> TTS -> speaker and executes the pipeline. |
-| `application/services/brain/flow4_attach/startup_probes.py` | Flow4 startup checks: proves each stream can open before the inbound API starts. |
-| `application/services/brain/shared/microphone_lifecycle.py` | Shared microphone stop/cleanup helper that closes through the microphone API. |
-| `application/services/brain/shared/stream_helpers.py` | Shared async stream helpers and bounded probe utilities. |
-
-## 6. Full Voice Pipeline Flow
-
-The full pipeline runs automatically at brain startup during mandatory preflight. The inbound API is not opened until this startup flow passes.
-
-Startup preflight does not check only once. It polls readiness until every microservice reports available or the configured timeout expires.
-
-Before normal speaker playback execution, the brain service loads:
-
-1. microphone stream output;
-2. STT stream input/output;
-3. TTS stream input;
-4. TTS stream output;
-5. speaker stream input request.
-
-Stream setup is explicit. Flow2 owns every external stream output request, Flow3 owns every external stream input request DTO, and Flow4 is the only place where those streams are attached together.
-
-For the real microphone-to-STT path, the brain routes the streaming response from microphone `/start` directly into STT. It does not start the microphone and then discard the `/start` response, because closing that response can cause the microphone microservice to close its stream before STT consumes it.
-
-The runtime pipeline keeps the text-to-speech input upload active while it opens the TTS output stream and sends that audio to the speaker. This prevents the flow from becoming serial, where STT would have to finish before TTS output and speaker playback could start.
-
-Startup preflight is bounded and does not require live speech. It probes:
-
-1. microphone stream by opening `/start` and reading one audio chunk from the start response;
-2. STT stream by sending finite silent PCM to `/process/stream` and waiting for the stream to complete;
-3. TTS stream by sending `"startup preflight"` and reading one audio chunk;
-4. speaker stream by sending finite silent PCM to `/play/stream`.
-
-After the probes pass, the brain starts an internal pipeline supervisor. This is not triggered by an inbound API request. The supervisor calls the application service directly, keeps the flow active, and restarts it after completion or failure.
-
-The same pipeline can also be triggered manually after startup by:
-
-```http
-POST /voice/pipeline
+```powershell
+curl -X POST "http://127.0.0.1:7999/voice/pipeline"
 ```
 
-Startup high-level flow:
-
-```text
-main.py
-  -> composition_root.setup()
-  -> Flow1 health checks
-  -> startup stream probes
-  -> internal pipeline supervisor
-  -> BrainService.run_voice_pipeline()
-  -> Microphone HTTP adapter
-  -> STT HTTP adapter
-  -> TTS HTTP adapter
-  -> Speaker HTTP adapter
-  -> Brain FastAPI adapter opens only after startup checks pass
-```
-
-## 7. Detailed Pipeline Steps
-
-The program starts the voice pipeline from the composition root before opening the inbound HTTP adapter:
-
-1. Load configuration from `.env` and process environment variables.
-2. Build outbound HTTP adapters for microphone, STT, TTS, and speaker.
-3. Run Flow1 health checks until all microservices report available.
-4. Run bounded startup stream probes so each required stream can open and transfer data.
-5. Start the internal pipeline supervisor.
-6. Load the full voice pipeline in `BrainService`.
-7. Create a microphone stream request.
-8. Start the microphone by calling the microphone service `POST /start`.
-9. Flow2 gets microphone stream output from the `POST /start` streaming response.
-10. Flow3 creates the STT stream input from the microphone audio stream.
-11. Flow4 attaches microphone stream output to STT stream input.
-12. Flow2 opens STT stream processing by calling the STT service `POST /process/stream`.
-13. STT receives microphone audio bytes through the request body.
-14. Flow2 receives STT stream output as SSE text events.
-15. Clean and limit text segments according to `max_text_segments`.
-16. Flow3 starts the TTS text stream input task.
-17. Flow4 attaches STT text stream output to TTS stream input.
-18. Flow2 gets TTS audio stream output by calling the TTS service `GET /process/stream/get`.
-19. Flow3 creates the speaker stream input from the TTS audio stream.
-20. Flow4 attaches TTS audio stream output to speaker stream input.
-21. Wait for speaker playback response.
-22. Stop the microphone through the microphone API during cleanup.
-23. Open the inbound FastAPI adapter only after startup checks and internal pipeline startup pass.
-
-After startup, the same pipeline can still be triggered manually with `POST /voice/pipeline`; in that path the inbound adapter only maps HTTP input to service DTOs and delegates to the same Flow4 attachment logic.
-
-Result shape:
+Example response shape:
 
 ```json
 {
   "action": "voice_pipeline",
   "status": "success",
   "status_code": 200,
-  "message": "Playback completed",
+  "message": "Voice pipeline started",
   "timestamp": 0,
   "data": {
-    "success": true,
-    "text_segments_forwarded": 1
+    "started": true
   }
 }
 ```
 
-## 8. Console Logs
+The pipeline runs as a background task after this response. All streams stay active until the service shuts down.
 
-The service prints console logs for important execution points:
+Errors use the same envelope with `status: "error"` and `data: null`.
 
-- environment loading;
-- dependency container creation;
-- inbound HTTP requests;
-- pipeline loading;
-- microphone start;
-- microphone stream retrieval;
-- microphone audio chunks forwarded to STT;
-- STT SSE bytes received;
-- STT text events parsed;
-- STT text chunks forwarded to TTS;
-- TTS stream input accepted;
-- TTS audio chunks received;
-- TTS audio chunks forwarded to speaker;
-- speaker playback completion;
-- errors and timeouts.
+### HTTP Stream Contract
 
-Example log style:
+Every HTTP stream consumed or produced by the outbound adapters uses the standard stream event JSON shape. Brain writes streaming request bodies as NDJSON (`Content-Type: application/x-ndjson`) and parses streaming responses as NDJSON, except STT text output, which remains SSE-compatible because the existing STT service exposes `text/event-stream`.
 
-```text
-[2026-05-21T00:19:51] [brain-service] 3/6 connecting microphone stream output to STT stream input
-[2026-05-21T00:19:51] [stt-adapter] forwarding microphone audio to STT | chunk=1 bytes=1024 total_bytes=1024
+Standard event:
+
+```json
+{
+  "type": "stream_started",
+  "sequence": 1,
+  "timestamp": "2026-05-24T12:00:00Z",
+  "payload": {}
+}
 ```
 
-## 9. Configuration
+Rules enforced by Brain adapters:
 
-Configuration is read from `.env` and process environment variables.
+- each stream starts with `stream_started` at `sequence: 1`;
+- `sequence` increments by 1 per event;
+- `timestamp` must be UTC ISO-8601 ending in `Z`;
+- `payload` is always an object;
+- allowed `type` values are `stream_started`, `partial`, `completed`, `heartbeat`, and `error`;
+- binary/audio partials use `payload.bytes_base64`;
+- text partials use `payload.text`;
+- logical completion uses `payload.reason: "completed"` plus `payload.output` for text or `payload.output_bytes_base64` for audio;
+- raw text chunks, sentinel strings, `[DONE]`, `EOF`, and unstructured stream data are rejected.
+
+Wire formats:
+
+| Endpoint direction | Wire format |
+| --- | --- |
+| Microphone `GET /stream`, `POST /start` response | NDJSON standard events |
+| STT `POST /process/stream/set` request | NDJSON standard events |
+| STT `GET /process/stream/get` response | SSE, with each `data:` value exactly one standard event JSON object |
+| TTS `POST /process/stream/set` request | NDJSON standard events |
+| TTS `GET /process/stream/get` response | NDJSON standard events |
+| Speaker `POST /process/stream/set` request | NDJSON standard events |
+
+## 5. Voice Pipeline
+
+The full voice pipeline is implemented by `application/services/pipeline.py` and isolated step files under `application/services/steps/`.
+
+`VoicePipelineFlow` runs all 10 steps once in order. The SET and GET streams are opened during setup, before the user speaks. The pipeline then waits for live streams to complete naturally, or stays alive when upstream streams stay open. On shutdown, background tasks are cancelled via `cancel_pending_tasks()`.
+
+Step order:
+
+| Step | File | Responsibility |
+| --- | --- | --- |
+| 1 | `steps/health_check/step1_health_check.py` | Check all required integrations. |
+| 2 | `steps/stream_get/step2_get_mic_stream.py` | Open the microphone stream. |
+| 3 | `steps/stream_set/step3_set_stt_stream.py` | Start STT SET from the STT input connector. |
+| 4 | `steps/stream_get/step4_get_stt_stream.py` | Open STT GET for text output. |
+| 5 | `steps/stream_set/step5_set_tts_stream.py` | Start TTS SET from the TTS input connector. |
+| 6 | `steps/stream_get/step6_get_tts_stream.py` | Open TTS GET for audio output. |
+| 7 | `steps/stream_set/step7_set_speaker_stream.py` | Start speaker playback from the speaker input connector. |
+| 8 | `steps/stream_internal/step8_mic_to_stt.py` | Bridge microphone output through the internal `mic-to-stt-audio` pipe into STT. |
+| 9 | `steps/stream_internal/step9_stt_to_tts.py` | Bridge STT text output through the internal `stt-to-tts-text` pipe into TTS. |
+| 10 | `steps/stream_internal/step10_tts_to_speaker.py` | Bridge TTS audio output through the internal `tts-to-speaker-audio` pipe into speaker. |
+
+
+Cross-step state moves through `VoicePipelineContext`; steps do not call each other directly. Internal bridge steps own the source stream, destination stream, and `AsyncStreamPipe` for each boundary: mic-to-STT audio, STT-to-TTS text, and TTS-to-speaker audio. Each internal pipe carries standard stream events, and each `completed` event includes the full text or audio output.
+
+The pipeline is started in the background during service startup. `POST /voice/pipeline` starts a new instance as a background task and returns `{"started": true}` immediately.
+
+## 6. Startup Flow
+
+When `main.py` runs:
+
+1. VS Code launch profile environment is applied when available.
+2. Local `.env` is loaded for non-VS Code runs when no launch profile was selected.
+3. Runtime config is parsed.
+4. Logger is configured for the selected environment.
+5. Outbound HTTP adapters are created.
+6. Startup preflight polls external service health until ready or timeout.
+7. The mandatory startup voice pipeline starts in the background.
+8. FastAPI routes are registered.
+9. Uvicorn serves the inbound API.
+10. Shutdown cancels background tasks, stops microphone through its API, and closes HTTP clients.
+
+Startup preflight is controlled by:
+
+```env
+STARTUP_PREFLIGHT_ENABLED=true
+STARTUP_PREFLIGHT_TIMEOUT_SECONDS=60
+MICROSERVICE_READY_POLL_INTERVAL_SECONDS=2
+```
+
+## 7. Configuration
+
+Configuration comes from process environment, the selected VS Code launch profile, and `.env` fallback.
+
+Copy `.env.example` to `.env` for local command-line runs:
+
+```powershell
+Copy-Item .env.example .env
+```
 
 Important defaults:
 
 ```env
-APP_ENV=debug
+APP_ENV=development
 SERVICE_HOST=127.0.0.1
-SERVICE_PORT=8000
+SERVICE_PORT=7999
 
 PROVIDER_NAME=local
 PROVIDER_TIMEOUT_SECONDS=30
 PROVIDER_API_KEY=
-
-STARTUP_PREFLIGHT_ENABLED=true
-STARTUP_PREFLIGHT_TIMEOUT_SECONDS=60
-MICROSERVICE_READY_POLL_INTERVAL_SECONDS=2
-STREAM_PROBE_TIMEOUT_SECONDS=10
-STARTUP_PREFLIGHT_MAX_TEXT_SEGMENTS=1
-STARTUP_INTERNAL_PIPELINE_ENABLED=true
-STARTUP_INTERNAL_PIPELINE_MAX_TEXT_SEGMENTS=0
-STARTUP_INTERNAL_PIPELINE_RESTART_DELAY_SECONDS=5
 
 MICROPHONE_BASE_URL=http://127.0.0.1:8000
 MICROPHONE_STREAM_ENDPOINT=/stream
@@ -283,7 +222,8 @@ MICROPHONE_START_ENDPOINT=/start
 MICROPHONE_STOP_ENDPOINT=/stop
 
 STT_BASE_URL=http://127.0.0.1:8001
-STT_STREAM_ENDPOINT=/process/stream
+STT_SET_STREAM_ENDPOINT=/process/stream/set
+STT_GET_STREAM_ENDPOINT=/process/stream/get
 STT_BATCH_ENDPOINT=/process/batch
 
 TTS_BASE_URL=http://127.0.0.1:8002
@@ -291,42 +231,124 @@ TTS_SET_STREAM_ENDPOINT=/process/stream/set
 TTS_STREAM_ENDPOINT=/process/stream/get
 
 SPEAKER_BASE_URL=http://127.0.0.1:8003
-SPEAKER_STREAM_ENDPOINT=/play/stream
+SPEAKER_PLAY_STREAM_ENDPOINT=/process/stream/set
+
+STARTUP_PREFLIGHT_ENABLED=true
+STARTUP_PREFLIGHT_TIMEOUT_SECONDS=60
+MICROSERVICE_READY_POLL_INTERVAL_SECONDS=2
 ```
 
-## 10. Run The Service
+Endpoint values can be paths or full URLs. Full URLs that match the configured service origin are normalized to paths.
 
-Using the project virtual environment:
+## 8. Runtime Environments And Logs
+
+The VS Code launch profiles in `.vscode/launch.json` can select the runtime environment:
+
+| Launch profile | Environment |
+| --- | --- |
+| `Python: Debug (development env)` | `development` |
+| `Python: Run (staging env)` | `staging` |
+| `Python: Run (production env)` | `production` |
+
+Environment resolution is centralized in `composition_root/environment.py`.
+
+Precedence:
+
+1. Process environment variables already present in the OS or inherited by Python.
+2. Selected VS Code launch profile `env`.
+3. Selected VS Code launch profile `envFile`.
+4. Safe fallback: `development`.
+
+`APP_ENV` is the primary environment variable. `VSCODE_ENV` is accepted as a fallback. The legacy value `debug` is treated as `development`.
+
+Application log filtering:
+
+| Environment | Application log levels shown |
+| --- | --- |
+| `development` | `trace`, `info`, `warn`, `error`, `critical` |
+| `staging` | `warn`, `error`, `critical` |
+| `production` | `critical` |
+
+FastAPI and Uvicorn logs are not filtered by the project logger.
+
+## 9. Run The Service
+
+Install dependencies if needed:
 
 ```powershell
-& 'D:\Hobbys\IA\Full_Ai_Agent\brain_microservice\windows\Scripts\python.exe' main.py
+& windows\Scripts\python.exe -m pip install -r requirements.windows.txt
 ```
 
-Then call:
+Start the external microphone, STT, TTS, and speaker services first. Then run:
 
 ```powershell
-curl -X POST "http://127.0.0.1:8000/voice/pipeline"
+& windows\Scripts\python.exe main.py
 ```
 
-## 11. Run Tests
-
-Run all unit tests:
+Useful checks:
 
 ```powershell
-& 'D:\Hobbys\IA\Full_Ai_Agent\brain_microservice\windows\Scripts\python.exe' -m pytest tests\unit
+curl "http://127.0.0.1:7999/health"
+curl "http://127.0.0.1:7999/integrations/health"
+curl -X POST "http://127.0.0.1:7999/voice/pipeline"
 ```
 
-Expected current result:
+## 10. Run Tests
+
+Run mock tests only. These do not require external services:
+
+```powershell
+& windows\Scripts\python.exe -m pytest -q tests\mock
+```
+
+Collect the whole suite:
+
+```powershell
+& windows\Scripts\python.exe -m pytest --collect-only -q
+```
+
+Current collection:
 
 ```text
-7 passed
+76 tests collected
 ```
+
+Run live tests against real configured microservices:
+
+```powershell
+$env:RUN_LIVE_MICROSERVICE_TESTS='1'
+& windows\Scripts\python.exe -m pytest -q tests\live
+```
+
+Live tests are skipped by default unless `RUN_LIVE_MICROSERVICE_TESTS=1` is set.
+
+## 11. Repository Map
+
+| Path | Purpose |
+| --- | --- |
+| `main.py` | Program entry point. |
+| `composition_root/` | Config loading, dependency wiring, startup preflight, and server setup. |
+| `application/services/service.py` | Public `BrainService` facade for health, STT, TTS, transcription, and pipeline use cases. |
+| `application/services/pipeline.py` | Full voice pipeline executor. |
+| `application/services/steps/` | Isolated pipeline steps. |
+| `application/ports/` | Application port interfaces. |
+| `application/dtos/` | Inbound, service, and outbound DTOs plus mappers. |
+| `infrastructure/inbound/http/` | FastAPI adapter and route registration. |
+| `infrastructure/outbound/http/` | HTTP adapters for external microservices. |
+| `domain/` | Shared models, errors, and console logger. |
+| `docs/` | External microservice contract notes. |
+| `tests/mock/` | Fake-backed and `httpx.MockTransport` tests. |
+| `tests/live/` | Opt-in tests against real microservices. |
+| `tests/shared/` | Shared fakes, streams, and live service wiring for tests. |
+
+More detailed flow notes live in `application/services/FLOW_INDEX.md` and the `tests/**/README.md` files.
 
 ## 12. Assumptions
 
-- The microphone, STT, TTS, and speaker services are external microservices running separately.
+- Microphone, STT, TTS, and speaker are external services running separately.
 - The brain service integrates with them over HTTP.
-- STT streaming responses use SSE lines formatted as `data: <text>`.
-- TTS uses the documented decoupled set/get stream flow.
-- The final audio output is sent to the speaker service. The microphone service has no documented stream input endpoint.
 - Raw audio streams are treated as PCM byte streams according to the external service docs.
+- STT streaming responses use SSE-style text events.
+- STT and TTS use decoupled set/get stream flows.
+- Speaker consumes the TTS audio stream through its configured playback endpoint.
+- The brain service stops the microphone through the microphone API during cleanup.
