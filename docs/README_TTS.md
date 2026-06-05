@@ -6,7 +6,7 @@ Where behavior is not explicit in code, it is marked as **Inferred** or **Needs 
 
 ## Project Overview
 
-This project implements a small Text-to-Speech HTTP microservice. It exposes a FastAPI server that accepts text, synthesizes speech using `pyttsx3`, and returns audio either as an HTTP streaming response or as a JSON payload containing base64 audio data.
+This project implements a small Text-to-Speech HTTP microservice. It exposes a FastAPI server that accepts text, synthesizes speech using `pyttsx3`, and returns audio either as newline-delimited JSON streaming events or as a JSON payload containing base64 audio data.
 
 The code is organized around a ports-and-adapters, or hexagonal, architecture:
 
@@ -22,7 +22,7 @@ Main responsibilities:
 - Accept plain text through HTTP endpoints.
 - Convert text lines into async text streams.
 - Synthesize audio with `pyttsx3` in isolated subprocesses.
-- Stream generated WAV frame bytes back to clients.
+- Stream generated audio chunks as explicit NDJSON events.
 - Support a decoupled two-step streaming flow where one request starts synthesis and another request drains the generated audio queue.
 - Provide basic health and TTS availability checks.
 
@@ -34,7 +34,8 @@ Core business logic:
 - Synthesis writes a temporary `.wav` file through `pyttsx3`.
 - The service reads the temporary WAV file with Python's `wave` module in 1024-frame chunks.
 - Chunks are placed on an `asyncio.Queue` or yielded through an async iterator.
-- A `None` sentinel indicates end-of-stream for queue-backed audio streams.
+- The HTTP adapter wraps chunks in `partial` events and emits `completed` for each logical output.
+- Internal `None` sentinels end queue-backed audio streams, but clients must rely on `completed`, not connection close or sentinel markers.
 
 Main workflows and lifecycle:
 
@@ -44,8 +45,23 @@ Main workflows and lifecycle:
 4. `generate_tts_dependency()` creates `PyTTSx3Adapter`, `TTSService`, a FastAPI app, and `FastApiAdapter`.
 5. FastAPI routes call adapter methods, which map inbound DTOs to service DTOs.
 6. `TTSService` maps service DTOs to outbound DTOs and delegates to `PyTTSx3Adapter`.
-7. The outbound adapter invokes `pyttsx3` in subprocesses and returns audio bytes.
-8. On shutdown, Uvicorn exits, FastAPI lifespan calls `stop_autoload()`, and `setup()` calls `_cleanup()`.
+7. The outbound adapter invokes `pyttsx3` in subprocesses and returns audio bytes to the HTTP adapter.
+8. The HTTP adapter encodes streamed bytes as NDJSON events with monotonic sequence numbers.
+9. On shutdown, Uvicorn exits, FastAPI lifespan calls `stop_autoload()`, and `setup()` calls `_cleanup()`.
+
+## Streaming Contract
+
+`POST /process/stream` and `GET /process/stream/get` return `application/x-ndjson`. Each line is one complete JSON object:
+
+```json
+{"type":"stream_started","sequence":1,"timestamp":"2026-05-24T12:00:00Z","payload":{}}
+{"type":"partial","sequence":2,"timestamp":"2026-05-24T12:00:01Z","payload":{"bytes_base64":"UklGRg==","byte_count":4,"chunk_index":1}}
+{"type":"completed","sequence":3,"timestamp":"2026-05-24T12:00:02Z","payload":{"reason":"completed","output_bytes_base64":"UklGRg==","total_bytes":4,"chunk_count":1}}
+```
+
+Required event fields are `type`, `sequence`, `timestamp`, and `payload`. `sequence` starts at `1` and increments by `1` for every event in the stream. Binary audio is base64 encoded in `bytes_base64` for `partial` events and `output_bytes_base64` for `completed`.
+
+Clients should process `completed` immediately as the end of the current logical output. The HTTP connection may remain open afterward, optionally emitting `heartbeat` events when `keep_open_after_completed=true`.
 
 ## Architecture
 
@@ -221,15 +237,17 @@ sequenceDiagram
     Service->>TTS: process_stream(ProcessStreamRequestDto)
     TTS-->>Service: AsyncAudioStream
     Service-->>HTTP: audio_stream
-    HTTP-->>Client: StreamingResponse audio/wav
+    HTTP-->>Client: StreamingResponse application/x-ndjson
 
     loop each text line
         TTS->>Proc: python -c generated pyttsx3 script
         Proc->>WAV: save_to_file(text, temp_path)
         TTS->>WAV: wave.open(temp_path)
         TTS-->>HTTP: yield 1024-frame chunks
+        HTTP-->>Client: partial event with bytes_base64
         TTS->>WAV: delete temp file
     end
+    HTTP-->>Client: completed event
 ```
 
 ## Repository Structure
@@ -379,7 +397,8 @@ Streaming lifecycle:
 - It wraps the resulting list in an async generator.
 - The outbound adapter creates an async audio stream and a background generation task.
 - Each text line produces a separate temporary WAV file.
-- WAV frames are yielded to the HTTP response.
+- WAV frames are encoded as `partial` NDJSON events in the HTTP response.
+- A `completed` event marks the logical output complete even if the connection remains open.
 
 Decoupled stream lifecycle:
 
@@ -414,9 +433,9 @@ Shutdown handling exists but is minimal:
   - `GET /redoc`
   - `GET /openapi.json`
 - Primary synthesis endpoints:
-  - `POST /process/stream` - plain text body to streamed WAV bytes
+  - `POST /process/stream` - plain text body to streamed NDJSON audio events
   - `POST /process/stream/set` - plain text body to background synthesis queue
-  - `GET /process/stream/get` - drain background synthesis queue as streamed WAV bytes
+  - `GET /process/stream/get` - drain background synthesis queue as streamed NDJSON audio events
   - `POST /process/batch?text=...` - query-param batch text to JSON with `audio_data_base64`
 - Health endpoints:
   - `GET /health`
@@ -428,9 +447,9 @@ Shutdown handling exists but is minimal:
 | --- | ---: | --- | --- | --- | --- | --- |
 | HTTP | `SERVICE_PORT`, default `8002` | HTTP | `GET /health` | Liveness-style service check | `health_check()` in `FastApiAdapter.register_routes()` | None beyond FastAPI |
 | HTTP | `SERVICE_PORT`, default `8002` | HTTP | `GET /available` | Check whether `pyttsx3` can initialize | `handle_check_availability()` | `TTSService.is_available()`, `PyTTSx3Adapter.is_available()`, subprocess, `pyttsx3` |
-| HTTP | `SERVICE_PORT`, default `8002` | HTTP | `POST /process/stream` | Synthesize newline-delimited text and stream audio in same request | `handle_process_stream()` | `TTSService.process_stream()`, `PyTTSx3Adapter.process_stream()`, temp WAV files, subprocess, OS TTS engine |
+| HTTP | `SERVICE_PORT`, default `8002` | HTTP | `POST /process/stream` | Synthesize newline-delimited text and stream NDJSON audio events in same request | `handle_process_stream()` | `TTSService.process_stream()`, `PyTTSx3Adapter.process_stream()`, temp WAV files, subprocess, OS TTS engine |
 | HTTP | `SERVICE_PORT`, default `8002` | HTTP | `POST /process/stream/set` | Start background synthesis for a single shared decoupled stream | `handle_set_stream()` | `TTSService.set_stream()`, `PyTTSx3Adapter.set_stream()`, shared queue, subprocess, temp WAV files |
-| HTTP | `SERVICE_PORT`, default `8002` | HTTP | `GET /process/stream/get` | Stream audio from the current shared decoupled queue | `handle_get_stream()` | `TTSService.get_stream()`, `PyTTSx3Adapter.get_stream()`, shared queue |
+| HTTP | `SERVICE_PORT`, default `8002` | HTTP | `GET /process/stream/get` | Stream NDJSON audio events from the current shared decoupled queue | `handle_get_stream()` | `TTSService.get_stream()`, `PyTTSx3Adapter.get_stream()`, shared queue |
 | HTTP | `SERVICE_PORT`, default `8002` | HTTP | `POST /process/batch` | Attempt batch synthesis and return base64 audio JSON | `handle_process_batch()` | `TTSService.process_batch()`, `PyTTSx3Adapter.process_batch()`, subprocess, temp WAV files |
 | HTTP | `SERVICE_PORT`, default `8002` | HTTP | `GET /docs` | Swagger UI generated by FastAPI | FastAPI built-in | OpenAPI schema |
 | HTTP | `SERVICE_PORT`, default `8002` | HTTP | `GET /redoc` | ReDoc generated by FastAPI | FastAPI built-in | OpenAPI schema |
@@ -524,7 +543,7 @@ Example response:
 
 - Port: `SERVICE_PORT`, default `8002`
 - Protocol: HTTP
-- Purpose: Synthesize a newline-delimited text payload and return streamed audio bytes.
+- Purpose: Synthesize a newline-delimited text payload and return newline-delimited JSON audio events.
 - Authentication: none.
 - Request format:
   - Body: UTF-8 plain text.
@@ -533,9 +552,12 @@ Example response:
   - Query parameters:
     - `sample_rate`, default `22050`
     - `channels`, default `1`
+    - `keep_open_after_completed`, default `false`
+    - `heartbeat_interval_seconds`, default `15.0`
 - Response format:
   - `StreamingResponse`
-  - `Content-Type`: `audio/wav`
+  - `Content-Type`: `application/x-ndjson`
+  - Body: one JSON event per line with `type`, `sequence`, `timestamp`, and `payload`.
   - Headers:
     - `Cache-Control: no-cache`
     - `Connection: keep-alive`
@@ -562,7 +584,7 @@ Example response:
   - `TTS_VOICE_NAME`, optional, default `Zira`
 - Failure behavior:
   - If route setup or initial processing raises, returns HTTP 500 JSON envelope.
-  - If errors occur after streaming begins inside the async generator, client behavior is governed by ASGI streaming semantics. **Needs verification:** no explicit mid-stream error envelope is possible once bytes start streaming.
+  - If errors occur after streaming begins, the stream emits an `error` event with `code`, `message`, and `recoverable`.
   - `_run_tts_subprocess()` returns an exception object instead of raising it to the caller. Current callers do not inspect the return value, so a failed subprocess can lead to a later `wave.open()` failure or empty/missing output.
 - Timeout/retry behavior:
   - No explicit synthesis timeout.
@@ -575,15 +597,19 @@ Example:
 ```bash
 curl -X POST "http://127.0.0.1:8002/process/stream?sample_rate=22050&channels=1" \
   -H "Content-Type: text/plain" \
-  --data-binary $'Hello from line one.\nHello from line two.' \
-  --output speech.wav
+  --data-binary $'Hello from line one.\nHello from line two.'
 ```
 
 Expected response:
 
 - HTTP 200
-- Body is streamed WAV frame bytes.
-- **Needs verification:** the streamed body contains frame data read from WAV files, but the implementation reads with `wave.readframes()` and does not explicitly prepend a WAV container header to the HTTP stream.
+- Body is streamed NDJSON events. Example:
+
+```json
+{"type":"stream_started","sequence":1,"timestamp":"2026-05-24T12:00:00Z","payload":{}}
+{"type":"partial","sequence":2,"timestamp":"2026-05-24T12:00:01Z","payload":{"bytes_base64":"UklGRg==","byte_count":4,"chunk_index":1}}
+{"type":"completed","sequence":3,"timestamp":"2026-05-24T12:00:02Z","payload":{"reason":"completed","output_bytes_base64":"UklGRg==","total_bytes":4,"chunk_count":1}}
+```
 
 ### `POST /process/stream/set`
 
@@ -645,12 +671,17 @@ Example response:
 
 - Port: `SERVICE_PORT`, default `8002`
 - Protocol: HTTP
-- Purpose: Retrieve audio chunks from the current decoupled audio queue.
+- Purpose: Retrieve audio events from the current decoupled audio queue.
 - Authentication: none.
-- Request format: no body.
+- Request format:
+  - No body.
+  - Query parameters:
+    - `keep_open_after_completed`, default `false`
+    - `heartbeat_interval_seconds`, default `15.0`
 - Response format:
   - `StreamingResponse`
-  - `Content-Type`: `audio/wav`
+  - `Content-Type`: `application/x-ndjson`
+  - Body: one JSON event per line with `stream_started`, zero or more `partial` events, and one `completed` event per logical output.
   - Headers:
     - `Cache-Control: no-cache`
     - `Connection: keep-alive`
@@ -670,7 +701,7 @@ Example response:
 - Failure behavior:
   - If no stream has been set, the handler returns an iterator over the current empty queue and may wait indefinitely for chunks. **Needs verification.**
   - If handler setup fails, returns HTTP 500 JSON envelope.
-  - End-of-stream occurs when `None` sentinel is read.
+  - Logical completion is signaled by a `completed` event when the internal `None` sentinel is read.
 - Timeout/retry behavior:
   - No explicit timeout.
   - No retry.
@@ -679,13 +710,13 @@ Example response:
 Example:
 
 ```bash
-curl http://127.0.0.1:8002/process/stream/get --output speech.wav
+curl http://127.0.0.1:8002/process/stream/get
 ```
 
 Expected response:
 
 - HTTP 200
-- Streaming audio bytes from the shared queue.
+- Streaming NDJSON events from the shared queue.
 
 ### `POST /process/batch`
 
@@ -875,15 +906,45 @@ Database structure:
 
 Configuration sources:
 
-- `.env` loaded at startup by `composition_root/setup/setup.py`.
-- Process environment variables.
-- VS Code debug configuration in `.vscode/launch.json`.
+- VS Code launch configuration in `.vscode/launch.json` is the primary execution-environment definition.
+- Each launch profile declares `APP_ENV`, `VSCODE_LAUNCH_PROFILE`, and an `envFile`.
+- Process environment variables are used at runtime. When launched from VS Code, these include values from the selected profile's `env` and `envFile`.
+- `.env`, `.env.staging`, and `.env.production` hold profile-specific runtime defaults for host, port, speech rate, and voice name.
+
+Runtime environment resolution:
+
+- Supported values are `development`, `staging`, and `production`.
+- Environment precedence is process `VSCODE_ENV`, process `APP_ENV`, then `VSCODE_LAUNCH_PROFILE` mapped through `.vscode/launch.json`.
+- `env` values in a launch profile override values from that profile's `envFile`.
+- Env-file selection uses the selected `VSCODE_LAUNCH_PROFILE` first, then the first launch profile matching the resolved environment, then `.env` as the development fallback.
+- `debug`, `dev`, `stage`, and `prod` are accepted aliases for `development`, `development`, `staging`, and `production`.
+- Missing or invalid environment values fall back to `development`, the safe default with full local diagnostics.
+
+Launch profile environment mapping:
+
+| Launch profile | `envFile` | Environment |
+| --- | --- | --- |
+| `Python: Debug (development env)` | `.env` | `development` |
+| `Python: Run (staging env)` | `.env.staging` | `staging` |
+| `Python: Run (production env)` | `.env.production` | `production` |
+
+Logging behavior:
+
+| Environment | Enabled levels |
+| --- | --- |
+| `development` | `trace`, `info`, `warn`, `error`, `critical` |
+| `staging` | `warn`, `error`, `critical` |
+| `production` | `critical` |
+
+Every application log line includes timestamp, environment, level, and module scope. Uvicorn/FastAPI server logs are always shown at `info` level or higher, including access logs, in every environment.
 
 Environment variables:
 
 | Variable | Required | Default | Purpose | Example |
 | --- | --- | --- | --- | --- |
-| `APP_ENV` | No | None in code | Present in `.env` and VS Code launch configs, but not read by runtime code. | `debug` |
+| `VSCODE_ENV` | No | `development` | Highest-precedence runtime environment override. | `staging` |
+| `APP_ENV` | No | `development` | Launch-profile runtime environment. | `development` |
+| `VSCODE_LAUNCH_PROFILE` | No | None | Optional launch profile name used to map `.vscode/launch.json` to an environment. | `Python: Run (production env)` |
 | `SERVICE_HOST` | No | `127.0.0.1` | Host/interface passed to Uvicorn. | `0.0.0.0` |
 | `SERVICE_PORT` | No | `8002` | TCP port passed to Uvicorn. | `8002` |
 | `TTS_SPEECH_RATE` | No | `140` | Speech rate passed to `engine.setProperty('rate', ...)`. Must parse as integer. | `140` |
@@ -894,10 +955,14 @@ Config files:
 
 | File | Purpose |
 | --- | --- |
-| `.env` | Local runtime config. Currently contains debug host, port, speech rate, and voice name. |
+| `.env` | Development runtime config for host, port, speech rate, and voice name. |
+| `.env.staging` | Staging runtime config for host, port, speech rate, and voice name. |
+| `.env.production` | Production runtime config for host, port, speech rate, and voice name. |
+| `infrastructure/config.py` | Runtime environment resolver that reads process env and `.vscode/launch.json`. |
+| `infrastructure/logger.py` | Centralized Logger utility and environment-specific logging setup. |
 | `requirements.windows.txt` | Python dependency list for Windows. |
 | `requirements.linux.txt` | Python dependency list for Linux. Same contents as Windows at inspection time. |
-| `.vscode/launch.json` | Debug and production launch profiles. Production profile references `.env.production`, which is not present. |
+| `.vscode/launch.json` | Development, staging, and production launch profiles. |
 | `.vscode/settings.json` | VS Code interpreter settings. |
 
 Secrets:
@@ -908,8 +973,8 @@ Secrets:
 Important config caveats:
 
 - `TTS_SPEECH_RATE` is cast with `int(...)`; non-integer values will fail container construction.
-- `APP_ENV` has no runtime effect.
-- `.env.production` is referenced by VS Code but not included. **Needs verification:** production environment handling may be incomplete.
+- To add a new launch profile, copy an existing profile in `.vscode/launch.json`, set `APP_ENV` or `VSCODE_ENV` to one of the supported environments, set `VSCODE_LAUNCH_PROFILE` to the profile name, and point `envFile` at the matching env file.
+- To add a new environment beyond `development`, `staging`, or `production`, update `SUPPORTED_ENVIRONMENTS` in `infrastructure/config.py`, add the logging threshold in `infrastructure/logger.py`, and create/update the relevant VS Code launch profile and env file.
 
 ## Build & Deployment
 
@@ -1156,7 +1221,7 @@ Assumptions found in code:
 
 - Text input is UTF-8.
 - Text lines are independent synthesis units.
-- WAV frame chunks can be streamed as `audio/wav` without explicit container header handling. **Needs verification.**
+- WAV frame chunks are sent to clients as base64 fields inside NDJSON events, not as raw HTTP audio bytes.
 - `sample_rate` and `channels` are accepted at API boundaries but not applied to `pyttsx3` output. They are currently metadata/control placeholders.
 - A preferred voice can be selected by checking whether `TTS_VOICE_NAME` is a substring of `voice.name` or whether `'en'` is in `voice.id`.
 - The current Python executable has all dependencies needed for subprocess synthesis.
@@ -1173,7 +1238,7 @@ What must be preserved for compatibility:
   - `message`
   - `timestamp`
   - `data`
-- Streaming endpoints returning `audio/wav`.
+- Streaming endpoints returning `application/x-ndjson` events with `stream_started`, `partial`, `completed`, optional `heartbeat`, and `error`.
 - `/docs`, `/redoc`, and `/openapi.json` if clients rely on interactive docs.
 - Decoupled flow contract:
   - set with `POST /process/stream/set`
@@ -1207,7 +1272,7 @@ Hidden coupling or implicit behavior:
 If rebuilding this project from scratch, what matters most:
 
 1. Preserve the inbound HTTP contracts that clients use.
-2. Decide whether audio responses should be valid standalone WAV files or raw WAV frame bytes.
+2. Preserve the explicit streaming event contract so clients never rely on connection close for logical completion.
 3. Keep TTS engine execution isolated from the event loop.
 4. Add explicit limits and timeouts around synthesis.
 5. Make batch synthesis return accumulated bytes instead of the final empty buffer.
@@ -1219,7 +1284,7 @@ If rebuilding this project from scratch, what matters most:
 
 Ambiguous behavior:
 
-- Whether streaming responses are valid full WAV files or raw frame streams labeled as `audio/wav`.
+- Whether the base64 event payloads should continue to contain raw PCM frames or move to full standalone audio containers.
 - Whether Linux/macOS support has been tested.
 - Whether `.env.production` is expected to exist.
 - Whether `sample_rate` and `channels` are intended future controls or should affect actual output.

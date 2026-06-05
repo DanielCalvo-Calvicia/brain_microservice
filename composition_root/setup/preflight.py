@@ -1,6 +1,6 @@
 import asyncio
 
-from application.services.brain_service import BrainService
+from application.services.service import BrainService
 from composition_root.config import AppConfig
 from domain.console import console_log
 
@@ -35,10 +35,6 @@ async def run_startup_preflight(service: BrainService, config: AppConfig) -> Non
 
 async def _run_checks(service: BrainService, config: AppConfig) -> None:
     await _wait_until_microservices_are_ready(service, config)
-
-    console_log("preflight", "all microservices are fully loaded; probing every stream")
-    await service.verify_startup_streams(config.stream_probe_timeout_seconds)
-    console_log("preflight", "all stream probes passed")
 
 
 async def _wait_until_microservices_are_ready(service: BrainService, config: AppConfig) -> None:

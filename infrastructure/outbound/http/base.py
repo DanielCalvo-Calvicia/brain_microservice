@@ -1,5 +1,5 @@
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from typing import Any
 
 import asyncio
@@ -45,11 +45,9 @@ class HttpServiceClient:
                 service=self._config.service_name,
                 status_code=response.status_code,
             )
-            if response.status_code >= 500:
-                return ExternalHealthResponseDto(False, f"HTTP {response.status_code}")
             if response.status_code in (401, 403):
                 raise ExternalServiceAuthenticationError(self._config.service_name, "authentication failed")
-            return ExternalHealthResponseDto(response.status_code < 400, f"HTTP {response.status_code}")
+            return ExternalHealthResponseDto(response.status_code == 200, f"HTTP {response.status_code}")
         except httpx.TimeoutException as exc:
             console_log("http-client", "health request timed out", service=self._config.service_name, error=str(exc))
             raise ExternalServiceTimeoutError(self._config.service_name, str(exc)) from exc
@@ -98,6 +96,21 @@ class HttpServiceClient:
                 f"HTTP {response.status_code}: {response.text[:200]}",
             )
 
+    def _raise_for_expected_status(self, response: httpx.Response, expected_status_code: int = 200) -> None:
+        self._raise_for_status(response)
+        if response.status_code != expected_status_code:
+            console_log(
+                "http-client",
+                "provider returned unexpected success status",
+                service=self._config.service_name,
+                status_code=response.status_code,
+                expected_status_code=expected_status_code,
+            )
+            raise ExternalServiceUnavailableError(
+                self._config.service_name,
+                f"expected HTTP {expected_status_code}, received HTTP {response.status_code}",
+            )
+
     async def _bytes_from_stream(
         self,
         method: str,
@@ -106,6 +119,7 @@ class HttpServiceClient:
         params: dict[str, Any] | None = None,
         content: AsyncIterator[bytes] | bytes | None = None,
         json: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> AsyncIterator[bytes]:
         full_url = self._url(url)
         console_log(
@@ -124,7 +138,8 @@ class HttpServiceClient:
                 params=params,
                 content=content,
                 json=json,
-                headers=self._headers(),
+                headers=self._headers(headers),
+                timeout=_stream_timeout(self._config.timeout_seconds),
             ) as response:
                 console_log(
                     "http-client",
@@ -132,7 +147,7 @@ class HttpServiceClient:
                     service=self._config.service_name,
                     status_code=response.status_code,
                 )
-                self._raise_for_status(response)
+                self._raise_for_expected_status(response)
                 async for chunk in response.aiter_bytes():
                     if chunk:
                         chunk_count += 1
@@ -177,6 +192,7 @@ class HttpServiceClient:
         params: dict[str, Any] | None = None,
         content: AsyncIterator[bytes] | bytes | None = None,
         json: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> AsyncIterator[bytes]:
         full_url = self._url(url)
         console_log(
@@ -193,7 +209,8 @@ class HttpServiceClient:
                 params=params,
                 content=content,
                 json=json,
-                headers=self._headers(),
+                headers=self._headers(headers),
+                timeout=_stream_timeout(self._config.timeout_seconds),
             )
             response = await self._client.send(request, stream=True)
             console_log(
@@ -215,6 +232,12 @@ class HttpServiceClient:
                     self._config.service_name,
                     f"HTTP {response.status_code}: {body[:200].decode('utf-8', errors='ignore')}",
                 )
+            if response.status_code != 200:
+                await response.aclose()
+                raise ExternalServiceUnavailableError(
+                    self._config.service_name,
+                    f"expected HTTP 200, received HTTP {response.status_code}",
+                )
             return _OpenedHttpByteStream(self._config.service_name, response)
         except httpx.TimeoutException as exc:
             console_log("http-client", "eager byte stream timed out", service=self._config.service_name, error=str(exc))
@@ -222,7 +245,6 @@ class HttpServiceClient:
         except httpx.RequestError as exc:
             console_log("http-client", "eager byte stream failed", service=self._config.service_name, error=str(exc))
             raise ExternalServiceUnavailableError(self._config.service_name, str(exc)) from exc
-
 
 class _OpenedHttpByteStream:
     def __init__(self, service_name: str, response: httpx.Response) -> None:
@@ -235,6 +257,10 @@ class _OpenedHttpByteStream:
 
     def __aiter__(self) -> "_OpenedHttpByteStream":
         return self
+
+    @property
+    def headers(self) -> httpx.Headers:
+        return self._response.headers
 
     async def __anext__(self) -> bytes:
         try:
@@ -282,7 +308,12 @@ class _OpenedHttpByteStream:
         console_log(
             "http-client",
             "eager byte stream closed",
+            blank_lines=2,
             service=self._service_name,
             chunks=self._chunk_count,
             total_bytes=self._byte_count,
         )
+
+
+def _stream_timeout(timeout_seconds: float) -> httpx.Timeout:
+    return httpx.Timeout(timeout_seconds, read=None)

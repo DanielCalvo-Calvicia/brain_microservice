@@ -21,7 +21,7 @@ class MicrophoneStreamResponseDto:
 
 
 @dataclass(frozen=True, slots=True)
-class STTStreamRequestDto:
+class STTSetStreamRequestDto:
     audio_stream: AsyncIterator[bytes]
     sample_rate: int = 16000
     chunk_size: int = 1024
@@ -30,8 +30,16 @@ class STTStreamRequestDto:
 
 
 @dataclass(frozen=True, slots=True)
+class STTTextStreamRequestDto:
+    sample_rate: int = 16000
+    chunk_size: int = 1024
+    silence_threshold: int = 150
+    silence_limit_seconds: float = 2.0
+
+
+@dataclass(frozen=True, slots=True)
 class STTStreamResponseDto:
-    text_stream: AsyncIterator[str]
+    text_stream: AsyncIterator[bytes]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +62,7 @@ class TTSSetStreamRequestDto:
 
 @dataclass(frozen=True, slots=True)
 class TTSTextStreamRequestDto:
-    text_stream: AsyncIterator[str]
+    text_stream: AsyncIterator[bytes]
     sample_rate: int = 24000
     channels: int = 1
 
@@ -63,6 +71,8 @@ class TTSTextStreamRequestDto:
 class TTSAudioStreamRequestDto:
     sample_rate: int = 24000
     channels: int = 1
+    keep_open_after_completed: bool = True
+    completed_outputs_to_read: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
