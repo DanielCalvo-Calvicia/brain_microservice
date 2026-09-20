@@ -2,10 +2,12 @@ import asyncio
 
 from application.dtos.outbound_dtos import TTSTextStreamRequestDto
 from application.ports.outbound_ports import TTSPort
-from domain.console import console_log
+from shared_logging import get_logger
 
 from ..context import AsyncStreamPipe, VoicePipelineContext, limit_and_count_text_stream
 from ..stream_internal.external_events import text_stream_as_ndjson_events
+
+logger = get_logger(__name__)
 
 
 class Step5SetTTSStream:
@@ -14,7 +16,7 @@ class Step5SetTTSStream:
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
-        console_log("flow4-attach", "pipeline step 5: setting TTS input stream connector")
+        logger.info("pipeline step 5: setting TTS input stream connector")
         tts_stream_in_pipe = AsyncStreamPipe[str]("tts-stream-in")
         context.tts_stream_in_pipe = tts_stream_in_pipe
         counted_text_stream = limit_and_count_text_stream(tts_stream_in_pipe.stream, request.max_text_segments)
@@ -30,4 +32,4 @@ class Step5SetTTSStream:
         if tts_input_task.done():
             await tts_input_task
         context.tts_input_task = tts_input_task
-        console_log("flow4-attach", "TTS input stream connector started")
+        logger.info("TTS input stream connector started")

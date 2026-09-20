@@ -2,9 +2,11 @@ import asyncio
 
 from application.dtos.outbound_dtos import SpeakerPlaybackRequestDto
 from application.ports.outbound_ports import SpeakerPort
-from domain.console import console_log
+from shared_logging import get_logger
 
 from ..context import AsyncStreamPipe, VoicePipelineContext, verify_speaker_input
+
+logger = get_logger(__name__)
 
 
 class Step7SetSpeakerStream:
@@ -13,7 +15,7 @@ class Step7SetSpeakerStream:
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
-        console_log("flow4-attach", "pipeline step 7: setting speaker input stream connector")
+        logger.info("pipeline step 7: setting speaker input stream connector")
         speaker_stream_in_pipe = AsyncStreamPipe[bytes]("speaker-stream-in")
         context.speaker_stream_in_pipe = speaker_stream_in_pipe
         speaker_input = SpeakerPlaybackRequestDto(
@@ -28,4 +30,4 @@ class Step7SetSpeakerStream:
         if speaker_task.done():
             await speaker_task
         context.speaker_task = speaker_task
-        console_log("flow4-attach", "speaker input stream connector started")
+        logger.info("speaker input stream connector started")

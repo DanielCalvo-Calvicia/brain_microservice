@@ -1,14 +1,19 @@
 import httpx
 
+from contracts.stream.common.base import EventType
+from contracts.stream.schemas import SPEAKER_OUTBOUND
+
 from application.dtos.outbound_dtos import SpeakerPlaybackRequestDto, SpeakerPlaybackResponseDto
 from infrastructure.outbound.http.base import _stream_timeout  # no read timeout for long audio
 from application.ports.outbound_ports import SpeakerPort
-from domain.console import console_log
+from shared_logging import get_logger
 from domain.errors import (
     ExternalServiceTimeoutError,
     ExternalServiceUnavailableError,
 )
 from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig
+
+logger = get_logger(__name__)
 
 
 class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
@@ -23,8 +28,7 @@ class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
 
     async def play_stream(self, request: SpeakerPlaybackRequestDto) -> SpeakerPlaybackResponseDto:
         try:
-            console_log(
-                "speaker-adapter",
+            logger.info(
                 "posting TTS audio stream to speaker playback endpoint",
                 endpoint=self._play_stream_endpoint,
                 sample_rate=request.sample_rate,
@@ -41,20 +45,28 @@ class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
                 timeout=_stream_timeout(self._config.timeout_seconds),
             )
             self._raise_for_expected_status(response)
-            message = _response_message(response)
-            console_log(
-                "speaker-adapter",
+            events = self._raise_for_ack_errors(response, SPEAKER_OUTBOUND)
+            message = _completed_message(events) or _response_message(response)
+            logger.info(
                 "speaker stream input accepted",
                 status_code=response.status_code,
                 provider_message=message,
             )
             return SpeakerPlaybackResponseDto(success=True, message=message)
         except httpx.TimeoutException as exc:
-            console_log("speaker-adapter", "speaker playback timed out", error=str(exc))
+            logger.error("speaker playback timed out", error=str(exc))
             raise ExternalServiceTimeoutError(self._config.service_name, str(exc)) from exc
         except httpx.RequestError as exc:
-            console_log("speaker-adapter", "speaker playback request failed", error=str(exc))
+            logger.error("speaker playback request failed", error=str(exc))
             raise ExternalServiceUnavailableError(self._config.service_name, str(exc)) from exc
+
+def _completed_message(events) -> str:
+    """The speaker's own words about how playback ended, from its ``completed`` event."""
+    for event in reversed(events):
+        if event.type is EventType.COMPLETED and event.payload.message:
+            return event.payload.message
+    return ""
+
 
 def _response_message(response: httpx.Response) -> str:
     if not response.headers.get("content-type", "").startswith("application/json"):

@@ -2,7 +2,9 @@ import asyncio
 
 from application.services.service import BrainService
 from composition_root.config import AppConfig
-from domain.console import console_log
+from shared_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class StartupPreflightError(RuntimeError):
@@ -11,11 +13,10 @@ class StartupPreflightError(RuntimeError):
 
 async def run_startup_preflight(service: BrainService, config: AppConfig) -> None:
     if not config.startup_preflight_enabled:
-        console_log("preflight", "startup preflight disabled")
+        logger.info("startup preflight disabled")
         return
 
-    console_log(
-        "preflight",
+    logger.info(
         "starting mandatory startup preflight before inbound adapter opens",
         timeout_seconds=config.startup_preflight_timeout_seconds,
     )
@@ -30,7 +31,7 @@ async def run_startup_preflight(service: BrainService, config: AppConfig) -> Non
             f"Startup preflight timed out after {config.startup_preflight_timeout_seconds} seconds"
         ) from exc
 
-    console_log("preflight", "startup preflight completed successfully")
+    logger.info("startup preflight completed successfully")
 
 
 async def _run_checks(service: BrainService, config: AppConfig) -> None:
@@ -44,11 +45,11 @@ async def _wait_until_microservices_are_ready(service: BrainService, config: App
 
     while True:
         attempt += 1
-        console_log("preflight", "checking all external microservices are fully loaded", attempt=attempt)
+        logger.info("checking all external microservices are fully loaded", attempt=attempt)
         health = await service.check_integrations()
         unavailable = [status for status in health.services if not status.is_available]
         if not unavailable:
-            console_log("preflight", "all external microservices are active and ready", attempts=attempt)
+            logger.info("all external microservices are active and ready", attempts=attempt)
             return
 
         last_unavailable = "; ".join(f"{status.name}: {status.detail}" for status in unavailable)
@@ -59,8 +60,7 @@ async def _wait_until_microservices_are_ready(service: BrainService, config: App
             )
 
         sleep_seconds = min(config.microservice_ready_poll_interval_seconds, remaining)
-        console_log(
-            "preflight",
+        logger.info(
             "microservices not ready yet; waiting",
             unavailable=last_unavailable,
             sleep_seconds=round(sleep_seconds, 2),

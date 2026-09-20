@@ -13,7 +13,9 @@ from application.services.steps.stream_internal.step10_tts_to_speaker import Ste
 from application.services.steps.stream_set.step3_set_stt_stream import Step3SetSTTStream
 from application.services.steps.stream_set.step5_set_tts_stream import Step5SetTTSStream
 from application.services.steps.stream_set.step7_set_speaker_stream import Step7SetSpeakerStream
-from domain.console import console_log
+from shared_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class VoicePipelineFlow:
@@ -36,8 +38,7 @@ class VoicePipelineFlow:
         self.set_speaker_step = Step7SetSpeakerStream(speaker_port)
 
     async def run(self, request: VoicePipelineServiceRequestDto) -> VoicePipelineServiceResponseDto:
-        console_log(
-            "flow4-attach",
+        logger.info(
             "starting voice pipeline",
             mic_sample_rate=request.microphone_sample_rate,
             mic_chunk_size=request.microphone_chunk_size,
@@ -58,6 +59,7 @@ class VoicePipelineFlow:
             mic_to_stt = Step8MicStreamToInternalStreamToSTTStream(
                 context.require_microphone_output().audio_stream,
                 context.require_stt_stream_in_pipe(),
+                expected_sample_rate=context.require_microphone_output().sample_rate,
             )
             await mic_to_stt.run(context)
 
@@ -71,24 +73,29 @@ class VoicePipelineFlow:
                 context.require_tts_output().audio_stream,
                 context.require_speaker_stream_in_pipe(),
                 completed_outputs_to_read=request.max_text_segments if request.max_text_segments > 0 else None,
+                expected_format=(request.tts_sample_rate, request.speaker_channels),
             )
             await tts_to_speaker.run(context)
-            console_log("flow4-attach", "all pipeline streams active - running until cancelled")
-            await context.require_tts_input_task()
-            if context.tts_to_speaker_task is not None:
-                await context.tts_to_speaker_task
+            logger.info("all pipeline streams active - running until cancelled")
+            await _fail_fast(
+                critical=[
+                    context.require_tts_input_task(),
+                    context.tts_to_speaker_task,
+                    context.require_speaker_task(),
+                ],
+                watched=[context.stt_input_task],
+            )
             speaker_response = await context.require_speaker_task()
             verify_speaker_response(speaker_response)
             text_segments = context.require_counted_text_stream().count
             if text_segments == 0:
-                console_log("flow4-attach", "voice pipeline completed without detected speech")
+                logger.info("voice pipeline completed without detected speech")
                 return VoicePipelineServiceResponseDto(
                     success=False,
                     message="No speech was detected before the STT stream completed.",
                     text_segments_forwarded=0,
                 )
-            console_log(
-                "flow4-attach",
+            logger.info(
                 "voice pipeline completed",
                 text_segments=text_segments,
                 success=speaker_response.success,
@@ -99,11 +106,10 @@ class VoicePipelineFlow:
                 text_segments_forwarded=text_segments,
             )
         except asyncio.CancelledError:
-            console_log("flow4-attach", "voice pipeline cancelled")
+            logger.info("voice pipeline cancelled")
             raise
         except Exception as exc:
-            console_log(
-                "flow4-attach",
+            logger.exception(
                 "voice pipeline failed during setup",
                 error_type=type(exc).__name__,
                 error=str(exc),
@@ -116,7 +122,23 @@ class VoicePipelineFlow:
 
 async def _stop_microphone_safely(microphone_port: MicrophonePort, reason: str) -> None:
     try:
-        console_log("brain-service", "stopping microphone via API", reason=reason)
+        logger.info("stopping microphone via API", reason=reason)
         await microphone_port.stop_stream()
     except Exception as exc:
-        console_log("brain-service", "microphone stop failed", reason=reason, error=str(exc))
+        logger.error("microphone stop failed", reason=reason, error=str(exc))
+
+
+async def _fail_fast(critical: list[asyncio.Task | None], watched: list[asyncio.Task | None]) -> None:
+    """Wait for every ``critical`` task, but raise the first failure of any task at once.
+
+    A service that fails ends its response; that surfaces here as the failure of its upload task, and
+    the whole pipeline must stop then, not after the other (healthy) tasks finish. ``watched`` tasks
+    (e.g. the microphone-fed STT upload) may keep running; they are only checked for failure.
+    """
+    critical_tasks = {task for task in critical if task is not None}
+    pending = critical_tasks | {task for task in watched if task is not None}
+    while critical_tasks & pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            if not task.cancelled() and task.exception() is not None:
+                raise task.exception()

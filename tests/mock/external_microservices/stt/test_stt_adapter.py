@@ -7,7 +7,7 @@ from application.dtos.outbound_dtos import STTBatchRequestDto, STTSetStreamReque
 from domain.errors import ExternalServiceUnavailableError
 from infrastructure.outbound.http.base import HttpServiceConfig
 from infrastructure.outbound.http.stt.stt_adapter import HttpSTTAdapter
-from application.services.steps.stream_internal.external_events import stream_event_bytes
+from tests.shared.wire import stream_event_bytes
 from tests.shared.streams import byte_stream
 
 

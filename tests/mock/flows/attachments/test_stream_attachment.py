@@ -12,15 +12,18 @@ from tests.shared.fakes import (
     DiagnosticTTS,
     build_brain_service,
 )
-from application.services.steps.stream_internal.external_events import decode_event_audio, ndjson_events
+import base64
+
+from application.services.steps.stream_internal.external_events import ndjson_events
+from contracts.stream.schemas import STT_INBOUND
 
 
 class FailingStreamSTT(DiagnosticSTT):
     async def set_stream(self, request):
         self.stream_requests.append(request)
-        async for event in ndjson_events(request.audio_stream, service_name="stt-test"):
+        async for event in ndjson_events(request.audio_stream, service_name="stt-test", schema=STT_INBOUND):
             if event.type == "partial":
-                self.audio_received += decode_event_audio(event)
+                self.audio_received += base64.b64decode(event.payload.bytes_base64)
         self._audio_complete.set()
         raise RuntimeError("stt stream failed")
 

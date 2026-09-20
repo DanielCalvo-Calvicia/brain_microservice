@@ -15,20 +15,19 @@ class LiveMicroservices:
                 "microphone",
                 config.microphone_base_url,
                 config.provider_timeout_seconds,
-                config.provider_api_key,
             ),
             stream_endpoint=config.microphone_stream_endpoint,
             start_endpoint=config.microphone_start_endpoint,
             stop_endpoint=config.microphone_stop_endpoint,
         )
         self.stt_adapter = HttpSTTAdapter(
-            HttpServiceConfig("stt", config.stt_base_url, config.provider_timeout_seconds, config.provider_api_key),
+            HttpServiceConfig("stt", config.stt_base_url, config.provider_timeout_seconds),
             set_stream_endpoint=config.stt_set_stream_endpoint,
             get_stream_endpoint=config.stt_get_stream_endpoint,
             batch_endpoint=config.stt_batch_endpoint,
         )
         self.tts_adapter = HttpTTSAdapter(
-            HttpServiceConfig("tts", config.tts_base_url, config.provider_timeout_seconds, config.provider_api_key),
+            HttpServiceConfig("tts", config.tts_base_url, config.provider_timeout_seconds),
             set_stream_endpoint=config.tts_set_stream_endpoint,
             get_stream_endpoint=config.tts_get_stream_endpoint,
         )
@@ -37,7 +36,6 @@ class LiveMicroservices:
                 "speaker",
                 config.speaker_base_url,
                 config.provider_timeout_seconds,
-                config.provider_api_key,
             ),
             play_stream_endpoint=config.speaker_play_stream_endpoint,
         )

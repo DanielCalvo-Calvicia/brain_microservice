@@ -17,15 +17,17 @@ from application.dtos.mapper.inbound_to_service import (
     map_voice_pipeline_request,
 )
 from application.ports.service_port import BrainServicePort
-from domain.console import console_log
+from shared_logging import get_logger
 from domain.errors import BrainMicroserviceError
+
+logger = get_logger(__name__)
 
 
 class FastApiAdapter:
     def __init__(self, service: BrainServicePort, app: FastAPI) -> None:
         self._service = service
         self.app = app
-        console_log("fastapi-adapter", "initializing inbound HTTP adapter")
+        logger.info("initializing inbound HTTP adapter")
         self.register_routes(app)
 
     @property
@@ -33,16 +35,16 @@ class FastApiAdapter:
         return self.app
 
     def register_routes(self, app: FastAPI) -> None:
-        console_log("fastapi-adapter", "registering HTTP routes")
+        logger.info("registering HTTP routes")
 
         @app.get("/health", tags=["Health"])
         async def health_check() -> JSONResponse:
-            console_log("fastapi-adapter", "received health request")
+            logger.info("received health request")
             return self._ok("health_check", "Brain microservice is healthy", None)
 
         @app.get("/integrations/health", tags=["Health"])
         async def integrations_health() -> JSONResponse:
-            console_log("fastapi-adapter", "received integrations health request")
+            logger.info("received integrations health request")
             response = await self._service.check_integrations()
             data = [
                 {"name": status.name, "is_available": status.is_available, "detail": status.detail}
@@ -59,23 +61,18 @@ class FastApiAdapter:
         async def transcribe_batch(request: Request, sample_rate: int = Query(16000)) -> JSONResponse:
             try:
                 body = await request.body()
-                console_log(
-                    "fastapi-adapter",
-                    "received STT batch request",
-                    bytes=len(body),
-                    sample_rate=sample_rate,
-                )
+                logger.info("received STT batch request", bytes=len(body), sample_rate=sample_rate)
                 service_request = map_batch_transcription_request(
                     BatchTranscriptionRequestDto(audio_data=body, sample_rate=sample_rate)
                 )
                 response = await self._service.transcribe_batch(service_request)
-                console_log("fastapi-adapter", "STT batch request completed", text_chars=len(response.text))
+                logger.info("STT batch request completed", text_chars=len(response.text))
                 return self._ok("stt_batch", "Audio transcribed", {"text": response.text})
             except BrainMicroserviceError as exc:
-                console_log("fastapi-adapter", "STT batch request failed", error=str(exc))
+                logger.error("STT batch request failed", error=str(exc))
                 return self._error("stt_batch", str(exc), 502)
             except Exception as exc:
-                console_log("fastapi-adapter", "STT batch request failed", error=str(exc))
+                logger.error("STT batch request failed", error=str(exc))
                 return self._error("stt_batch", str(exc), 500)
 
         @app.post("/tts/play", tags=["Text To Speech"])
@@ -86,8 +83,7 @@ class FastApiAdapter:
         ) -> JSONResponse:
             try:
                 text = (await request.body()).decode("utf-8")
-                console_log(
-                    "fastapi-adapter",
+                logger.info(
                     "received TTS playback request",
                     text_chars=len(text),
                     sample_rate=sample_rate,
@@ -101,17 +97,17 @@ class FastApiAdapter:
                     )
                 )
                 response = await self._service.play_text(service_request)
-                console_log("fastapi-adapter", "TTS playback request completed", success=response.success)
+                logger.info("TTS playback request completed", success=response.success)
                 return self._ok(
                     "tts_play",
                     response.message or "Text synthesized and played",
                     {"success": response.success},
                 )
             except BrainMicroserviceError as exc:
-                console_log("fastapi-adapter", "TTS playback request failed", error=str(exc))
+                logger.error("TTS playback request failed", error=str(exc))
                 return self._error("tts_play", str(exc), 502)
             except Exception as exc:
-                console_log("fastapi-adapter", "TTS playback request failed", error=str(exc))
+                logger.error("TTS playback request failed", error=str(exc))
                 return self._error("tts_play", str(exc), 500)
 
         @app.post("/voice/transcribe", tags=["Voice"])
@@ -123,8 +119,7 @@ class FastApiAdapter:
             max_segments: int = Query(1),
         ) -> JSONResponse:
             try:
-                console_log(
-                    "fastapi-adapter",
+                logger.info(
                     "received voice transcription request",
                     sample_rate=sample_rate,
                     chunk_size=chunk_size,
@@ -140,13 +135,16 @@ class FastApiAdapter:
                     )
                 )
                 response = await self._service.transcribe_microphone(service_request)
-                console_log("fastapi-adapter", "voice transcription request completed", segments=len(response.segments))
+                logger.info(
+                    "voice transcription request completed",
+                    segments=len(response.segments),
+                )
                 return self._ok("voice_transcribe", "Microphone audio transcribed", {"segments": response.segments})
             except BrainMicroserviceError as exc:
-                console_log("fastapi-adapter", "voice transcription request failed", error=str(exc))
+                logger.error("voice transcription request failed", error=str(exc))
                 return self._error("voice_transcribe", str(exc), 502)
             except Exception as exc:
-                console_log("fastapi-adapter", "voice transcription request failed", error=str(exc))
+                logger.error("voice transcription request failed", error=str(exc))
                 return self._error("voice_transcribe", str(exc), 500)
 
         @app.post("/voice/pipeline", tags=["Voice"])
@@ -160,8 +158,7 @@ class FastApiAdapter:
             speaker_channels: int = Query(1),
         ) -> JSONResponse:
             try:
-                console_log(
-                    "fastapi-adapter",
+                logger.info(
                     "received voice pipeline request - starting as background task",
                     microphone_sample_rate=microphone_sample_rate,
                     tts_sample_rate=tts_sample_rate,
@@ -181,11 +178,11 @@ class FastApiAdapter:
                 asyncio.create_task(self._service.run_voice_pipeline(service_request))
                 return self._ok("voice_pipeline", "Voice pipeline started", {"started": True})
             except Exception as exc:
-                console_log("fastapi-adapter", "voice pipeline request failed", error=str(exc))
+                logger.error("voice pipeline request failed", error=str(exc))
                 return self._error("voice_pipeline", str(exc), 500)
 
     def _ok(self, action: str, message: str, data) -> JSONResponse:
-        console_log("fastapi-adapter", "sending success response", action=action)
+        logger.info("sending success response", action=action)
         return JSONResponse(
             status_code=200,
             content={
@@ -199,7 +196,7 @@ class FastApiAdapter:
         )
 
     def _error(self, action: str, message: str, status_code: int) -> JSONResponse:
-        console_log("fastapi-adapter", "sending error response", action=action, status_code=status_code, error=message)
+        logger.info("sending error response", action=action, status_code=status_code, error=message)
         return JSONResponse(
             status_code=status_code,
             content={

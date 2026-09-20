@@ -1,28 +1,49 @@
 from collections.abc import AsyncIterator
+from typing import Any
 
-from domain.console import console_log
+from contracts.stream.codec import EventSequencer, encode_ndjson
+from contracts.stream.common.base import BaseEvent, EventType
+from contracts.stream.common.error import ErrorEvent, ErrorEventDTO
+from contracts.stream.microservices.speaker.inbound.completed import (
+    SpeakerCompletedInboundEvent,
+    SpeakerCompletedInboundEventDTO,
+)
+from contracts.stream.microservices.speaker.inbound.stream_started import (
+    SpeakerStreamStartedInboundEvent,
+    SpeakerStreamStartedInboundEventDTO,
+)
+from contracts.stream.microservices.speaker.inbound.partial import (
+    SpeakerPartialInboundEvent,
+    SpeakerPartialInboundEventDTO,
+)
+from contracts.stream.schemas import TTS_OUTBOUND
+from shared_logging import get_logger
+
+from domain.errors import ExternalServiceInvalidResponseError
 
 from ..context import AsyncStreamPipe, VoicePipelineContext
-from .events import (
-    StandardStreamEvent,
-    audio_completed_event,
-    audio_partial_event,
-    stream_error_event,
-    stream_started_event,
-    validate_internal_stream_event,
-)
-from .external_events import decode_completed_audio, decode_event_audio, ndjson_events, raise_for_stream_error, stream_event_bytes
+from .external_events import ndjson_events, raise_for_stream_error
+
+logger = get_logger(__name__)
 
 
 class Step10TTSStreamToInternalStreamToSpeakerStream:
+    """TTS outbound events -> (internal stream of Speaker inbound events) -> speaker input.
+
+    Audio is passed through untouched (TTS already produced the format Brain asked for, which is
+    the format the speaker was told to expect). Every TTS ``completed`` closes one spoken text.
+    """
+
     def __init__(
         self,
         tts_stream_out: AsyncIterator[bytes],
         speaker_stream_in: AsyncStreamPipe[bytes],
         completed_outputs_to_read: int | None = None,
+        expected_format: tuple[int, int] | None = None,
     ) -> None:
+        self.expected_format = expected_format  # (sample_rate, channels) Brain asked TTS for
         self.tts_stream_out = tts_stream_out
-        self.internal_stream = AsyncStreamPipe[StandardStreamEvent]("tts-to-speaker-audio")
+        self.internal_stream = AsyncStreamPipe[BaseEvent[Any]]("tts-to-speaker-audio")
         self.speaker_stream_in = speaker_stream_in
         self.completed_outputs_to_read = completed_outputs_to_read
 
@@ -33,74 +54,89 @@ class Step10TTSStreamToInternalStreamToSpeakerStream:
         context.create_task(self.internal_stream_to_speaker_stream(), "internal TTS audio to speaker connector")
 
     async def tts_stream_to_internal_stream(self) -> None:
-        sequence = 1
-        segment_chunks: list[bytes] = []
+        events = EventSequencer()
+        segment_has_partials = False
         completed_outputs = 0
         max_outputs = self.completed_outputs_to_read or 0
         try:
-            await self.internal_stream.put(stream_started_event(sequence))
-            sequence += 1
-            async for event in ndjson_events(self.tts_stream_out, service_name="tts"):
-                if event.type in ("stream_started", "heartbeat"):
-                    continue
-                if event.type == "partial":
-                    audio = decode_event_audio(event)
-                    if audio:
-                        segment_chunks.append(audio)
-                        await self.internal_stream.put(audio_partial_event(sequence, audio))
-                        sequence += 1
-                    continue
-                if event.type == "completed":
-                    if not segment_chunks:
-                        audio = decode_completed_audio(event)
-                        if audio:
-                            segment_chunks.append(audio)
-                            await self.internal_stream.put(audio_partial_event(sequence, audio))
-                            sequence += 1
+            async for event in ndjson_events(self.tts_stream_out, service_name="tts", schema=TTS_OUTBOUND):
+                if event.type is EventType.START_STREAM:
+                    announced = (event.payload.sample_rate, event.payload.channels)
+                    if self.expected_format is not None and announced != self.expected_format:
+                        raise ExternalServiceInvalidResponseError(
+                            "tts",
+                            f"stream announces {announced[0]} Hz x {announced[1]} channel(s), "
+                            f"expected {self.expected_format[0]} Hz x {self.expected_format[1]}",
+                        )
+                    await self.internal_stream.put(
+                        events.next(
+                            SpeakerStreamStartedInboundEvent,
+                            SpeakerStreamStartedInboundEventDTO(
+                                sample_rate=announced[0], channels=announced[1]
+                            ),
+                        )
+                    )
+                elif event.type is EventType.PARTIAL:
+                    segment_has_partials = True
+                    await self.internal_stream.put(
+                        events.next(
+                            SpeakerPartialInboundEvent,
+                            SpeakerPartialInboundEventDTO(bytes_base64=event.payload.bytes_base64),
+                        )
+                    )
+                elif event.type is EventType.COMPLETED:
+                    if not segment_has_partials and event.payload.output_bytes_base64:
+                        # No incremental audio was sent for this text: deliver it from ``completed``.
+                        await self.internal_stream.put(
+                            events.next(
+                                SpeakerPartialInboundEvent,
+                                SpeakerPartialInboundEventDTO(
+                                    bytes_base64=event.payload.output_bytes_base64
+                                ),
+                            )
+                        )
+                    segment_has_partials = False
                     completed_outputs += 1
-                    completed_event = audio_completed_event(sequence, b"".join(segment_chunks))
-                    sequence += 1
-                    segment_chunks = []
-                    console_log(
-                        "flow4-attach",
+                    logger.info(
                         "TTS-to-speaker internal stream completed event",
-                        level="critical",
-                        always=True,
-                        event_type=completed_event.type,
-                        sequence=completed_event.sequence,
-                        timestamp=completed_event.timestamp,
-                        payload=completed_event.payload,
+                        sequence=events.last + 1,
+                        total_bytes=event.payload.total_bytes,
+                        chunk_count=event.payload.chunk_count,
                         completed_outputs=completed_outputs,
                     )
-                    await self.internal_stream.put(completed_event)
+                    await self.internal_stream.put(
+                        events.next(SpeakerCompletedInboundEvent, SpeakerCompletedInboundEventDTO())
+                    )
                     if max_outputs > 0 and completed_outputs >= max_outputs:
                         break
-                    continue
-                if event.type == "error":
+                elif event.type is EventType.ERROR:
+                    if event.payload.recoverable:
+                        # One text failed to synthesize; the rest of the conversation goes on.
+                        logger.warning(
+                            "TTS reported a recoverable error",
+                            code=event.payload.code,
+                            message=event.payload.message,
+                        )
+                        segment_has_partials = False
+                        continue
                     raise_for_stream_error(event, service_name="tts")
         except Exception as exc:
-            await self.internal_stream.put(stream_error_event(sequence, str(exc)))
+            await self.internal_stream.put(
+                events.next(
+                    ErrorEvent,
+                    ErrorEventDTO(code="stream_error", message=str(exc), recoverable=True),
+                )
+            )
             raise
         finally:
             await self.internal_stream.close()
 
     async def internal_stream_to_speaker_stream(self) -> None:
-        expected_sequence = 1
         try:
             async for event in self.internal_stream.stream:
-                validate_internal_stream_event(event, expected_sequence)
-                expected_sequence += 1
-                if event.type in ("stream_started", "heartbeat"):
-                    await self.speaker_stream_in.put(stream_event_bytes(event.type, event.sequence, event.payload))
-                    continue
-                if event.type == "partial":
-                    await self.speaker_stream_in.put(stream_event_bytes(event.type, event.sequence, event.payload))
-                    continue
-                if event.type == "completed":
-                    await self.speaker_stream_in.put(stream_event_bytes(event.type, event.sequence, event.payload))
-                    continue
-                if event.type == "error":
-                    raise RuntimeError(str(event.payload.get("message", "TTS-to-speaker internal stream error")))
+                if event.type is EventType.ERROR:
+                    raise RuntimeError(event.payload.message or "TTS-to-speaker internal stream error")
+                await self.speaker_stream_in.put(encode_ndjson(event))
         except Exception as exc:
             await self.speaker_stream_in.fail(exc)
             raise

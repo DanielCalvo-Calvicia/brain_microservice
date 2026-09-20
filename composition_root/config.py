@@ -11,7 +11,6 @@ class AppConfig:
     service_port: int
     provider_name: str
     provider_timeout_seconds: float
-    provider_api_key: str
     microphone_base_url: str
     microphone_stream_endpoint: str
     microphone_start_endpoint: str
@@ -38,7 +37,6 @@ def load_config() -> AppConfig:
         service_port=_int_env("SERVICE_PORT", 7999),
         provider_name=os.getenv("PROVIDER_NAME", "local"),
         provider_timeout_seconds=_float_env("PROVIDER_TIMEOUT_SECONDS", 30.0),
-        provider_api_key=os.getenv("PROVIDER_API_KEY", ""),
         microphone_base_url=_base_url("MICROPHONE_BASE_URL", "http://127.0.0.1:8000"),
         microphone_stream_endpoint=_endpoint(
             "MICROPHONE_STREAM_ENDPOINT",

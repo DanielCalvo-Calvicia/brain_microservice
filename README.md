@@ -335,7 +335,7 @@ Live tests are skipped by default unless `RUN_LIVE_MICROSERVICE_TESTS=1` is set.
 | `application/dtos/` | Inbound, service, and outbound DTOs plus mappers. |
 | `infrastructure/inbound/http/` | FastAPI adapter and route registration. |
 | `infrastructure/outbound/http/` | HTTP adapters for external microservices. |
-| `domain/` | Shared models, errors, and console logger. |
+| `domain/` | Shared models and errors (logging: shared `shared_logging` package). |
 | `docs/` | External microservice contract notes. |
 | `tests/mock/` | Fake-backed and `httpx.MockTransport` tests. |
 | `tests/live/` | Opt-in tests against real microservices. |

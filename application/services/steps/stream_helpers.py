@@ -1,7 +1,9 @@
 import asyncio
 from collections.abc import AsyncIterator
 
-from domain.console import console_log
+from shared_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 async def finite_silence_audio_stream(sample_rate: int, seconds: int) -> AsyncIterator[bytes]:
@@ -19,7 +21,7 @@ async def read_one_chunk(name: str, byte_stream: AsyncIterator[bytes], timeout_s
         chunk = await asyncio.wait_for(byte_stream.__anext__(), timeout=timeout_seconds)
         if not chunk:
             raise RuntimeError(f"{name} stream probe returned an empty chunk")
-        console_log("brain-service", "stream probe received first chunk", stream=name, bytes=len(chunk))
+        logger.debug("stream probe received first chunk", stream=name, bytes=len(chunk))
     finally:
         close = getattr(byte_stream, "aclose", None)
         if close is not None:

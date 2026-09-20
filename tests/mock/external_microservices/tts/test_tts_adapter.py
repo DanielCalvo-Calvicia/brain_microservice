@@ -6,7 +6,8 @@ import pytest
 from application.dtos.outbound_dtos import TTSAudioStreamRequestDto, TTSSetStreamRequestDto, TTSTextStreamRequestDto
 from infrastructure.outbound.http.base import HttpServiceConfig
 from infrastructure.outbound.http.tts.tts_adapter import HttpTTSAdapter
-from application.services.steps.stream_internal.external_events import stream_event_bytes, text_stream_as_ndjson_events
+from application.services.steps.stream_internal.external_events import text_stream_as_ndjson_events
+from tests.shared.wire import stream_event_bytes
 from tests.shared.streams import byte_stream
 
 
@@ -116,8 +117,8 @@ async def test_tts_text_stream_wrapper_uses_partials_only_for_large_text() -> No
     )
 
     assert [event["type"] for event in events] == ["stream_started", "partial", "partial", "completed"]
-    assert events[1]["payload"] == {"text": "abc", "chunk_index": 1}
-    assert events[2]["payload"] == {"text": "def", "chunk_index": 2}
+    assert events[1]["payload"] == {"text": "abc"}
+    assert events[2]["payload"] == {"text": "def"}
     assert events[3]["payload"] == {"reason": "completed", "output": "abcdef"}
 
 

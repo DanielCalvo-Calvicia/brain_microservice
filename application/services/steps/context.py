@@ -13,7 +13,9 @@ from application.dtos.outbound_dtos import (
     TTSTextStreamRequestDto,
 )
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
-from domain.console import console_log
+from shared_logging import get_logger
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -49,10 +51,10 @@ class AsyncStreamPipe(Generic[T]):
         while True:
             item = await self._queue.get()
             if item is None:
-                console_log("brain-service", "stream pipe closed", blank_lines=2, stream=self._name)
+                logger.info("stream pipe closed", stream=self._name)
                 break
             if isinstance(item, BaseException):
-                console_log("brain-service", "stream pipe failed", level="error", blank_lines=2, stream=self._name, error=str(item))
+                logger.error("stream pipe failed", stream=self._name, error=str(item))
                 raise item
             yield item
 
@@ -71,13 +73,17 @@ class CountedTextStream:
         async for text in self._source:
             cleaned = text.strip()
             if not cleaned:
-                console_log("brain-service", "skipping empty STT text segment")
+                logger.info("skipping empty STT text segment")
                 continue
-            console_log("brain-service", "forwarding STT text segment to TTS", level="warn", segment=self.count + 1, chars=len(cleaned))
+            logger.info(
+                "forwarding STT text segment to TTS",
+                segment=self.count + 1,
+                chars=len(cleaned),
+            )
             yield cleaned
             self.count += 1
             if self._max_segments > 0 and self.count >= self._max_segments:
-                console_log("brain-service", "text segment limit reached", max_segments=self._max_segments)
+                logger.info("text segment limit reached", max_segments=self._max_segments)
                 break
 
 
@@ -116,7 +122,7 @@ class AudioSegmentPipe:
             return
         self._closed = True
         await self._queue.put(None)
-        console_log("brain-service", "audio segment pipe closed", blank_lines=2, pipe=self._name)
+        logger.info("audio segment pipe closed", pipe=self._name)
 
     @property
     def stream(self):
@@ -126,7 +132,7 @@ class AudioSegmentPipe:
         while True:
             item = await self._queue.get()
             if item is None:
-                console_log("brain-service", "audio segment pipe stream ended", blank_lines=2, pipe=self._name)
+                logger.info("audio segment pipe stream ended", pipe=self._name)
                 break
             yield item  # (audio_stream, ack_future)
 
@@ -135,7 +141,7 @@ def verify_microphone_output(output: MicrophoneStreamResponseDto) -> None:
     _verify_stream("microphone audio output", output.audio_stream)
     if output.sample_rate <= 0:
         raise RuntimeError("microphone output verification failed: sample_rate must be positive")
-    console_log("flow4-verify", "microphone output verified", sample_rate=output.sample_rate)
+    logger.info("microphone output verified", sample_rate=output.sample_rate)
 
 
 def verify_stt_input(stt_input: STTSetStreamRequestDto) -> None:
@@ -144,17 +150,21 @@ def verify_stt_input(stt_input: STTSetStreamRequestDto) -> None:
         raise RuntimeError("STT input verification failed: sample_rate must be positive")
     if stt_input.chunk_size <= 0:
         raise RuntimeError("STT input verification failed: chunk_size must be positive")
-    console_log("flow4-verify", "STT input verified", sample_rate=stt_input.sample_rate, chunk_size=stt_input.chunk_size)
+    logger.info(
+        "STT input verified",
+        sample_rate=stt_input.sample_rate,
+        chunk_size=stt_input.chunk_size,
+    )
 
 
 def verify_stt_output(output: STTStreamResponseDto) -> None:
     _verify_stream("STT text output", output.text_stream)
-    console_log("flow4-verify", "STT output verified")
+    logger.info("STT output verified")
 
 
 def verify_tts_output(output: TTSAudioStreamResponseDto) -> None:
     _verify_stream("TTS audio output", output.audio_stream)
-    console_log("flow4-verify", "TTS output verified")
+    logger.info("TTS output verified")
 
 
 def verify_speaker_input(speaker_input: SpeakerPlaybackRequestDto) -> None:
@@ -163,13 +173,17 @@ def verify_speaker_input(speaker_input: SpeakerPlaybackRequestDto) -> None:
         raise RuntimeError("speaker input verification failed: sample_rate must be positive")
     if speaker_input.channels <= 0:
         raise RuntimeError("speaker input verification failed: channels must be positive")
-    console_log("flow4-verify", "speaker input verified", sample_rate=speaker_input.sample_rate, channels=speaker_input.channels)
+    logger.info(
+        "speaker input verified",
+        sample_rate=speaker_input.sample_rate,
+        channels=speaker_input.channels,
+    )
 
 
 def verify_speaker_response(response: SpeakerPlaybackResponseDto) -> None:
     if not isinstance(response.success, bool):
         raise RuntimeError("speaker response verification failed: success must be a bool")
-    console_log("flow4-verify", "speaker response verified", success=response.success)
+    logger.info("speaker response verified", success=response.success)
 
 
 def _verify_stream(name: str, stream: AsyncIterator[Any]) -> None:
@@ -221,7 +235,7 @@ class VoicePipelineContext:
             try:
                 await task
             except asyncio.CancelledError:
-                console_log("flow4-attach", "pending stream task cancelled", task=task.get_name())
+                logger.info("pending stream task cancelled", task=task.get_name())
         await self.close_internal_streams()
 
     async def close_internal_streams(self) -> None:

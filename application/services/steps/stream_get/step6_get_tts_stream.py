@@ -1,8 +1,10 @@
 from application.dtos.outbound_dtos import TTSAudioStreamRequestDto
 from application.ports.outbound_ports import TTSPort
-from domain.console import console_log
+from shared_logging import get_logger
 
 from ..context import VoicePipelineContext, verify_tts_output
+
+logger = get_logger(__name__)
 
 
 class Step6GetTTSStream:
@@ -11,7 +13,7 @@ class Step6GetTTSStream:
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
-        console_log("flow4-attach", "pipeline step 6: getting TTS audio stream")
+        logger.info("pipeline step 6: getting TTS audio stream")
         completed_outputs_to_read = request.max_text_segments if request.max_text_segments > 0 else None
         tts_output = await self.tts_port.get_stream(
             TTSAudioStreamRequestDto(
@@ -23,4 +25,4 @@ class Step6GetTTSStream:
         )
         verify_tts_output(tts_output)
         context.tts_output = tts_output
-        console_log("flow4-attach", "TTS audio stream opened")
+        logger.info("TTS audio stream opened")

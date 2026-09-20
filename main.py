@@ -1,10 +1,12 @@
 import asyncio
 
 from composition_root.setup.setup import setup
-from domain.console import console_log
+from shared_logging import get_logger
+
+logger = get_logger(__name__)
 
 if __name__ == "__main__":
     try:
         asyncio.run(setup())
     except KeyboardInterrupt:
-        console_log("main", "keyboard interrupt received; exiting", level="warn")
+        logger.warning("keyboard interrupt received; exiting")

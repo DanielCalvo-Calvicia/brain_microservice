@@ -11,7 +11,7 @@ from application.dtos.service_dtos import VoicePipelineServiceRequestDto
 from application.ports.outbound_ports import STTPort
 from application.services.steps.context import VoicePipelineContext
 from application.services.steps.stream_get.step4_get_stt_stream import Step4GetSTTStream
-from application.services.steps.stream_internal.external_events import stream_event_bytes
+from tests.shared.wire import stream_event_bytes
 from tests.shared.streams import byte_stream
 
 

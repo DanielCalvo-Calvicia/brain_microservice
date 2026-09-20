@@ -18,6 +18,7 @@ from application.dtos.outbound_dtos import (
     TTSTextStreamRequestDto,
 )
 from application.services.steps.stream_internal.external_events import sse_events, text_stream_as_ndjson_events
+from contracts.stream.schemas import STT_OUTBOUND
 from tests.shared.live_microservices import LiveMicroservices
 
 
@@ -45,12 +46,11 @@ async def _collect_audio_chunks(audio_stream: AsyncIterator[bytes]) -> tuple[byt
 
 async def _collect_text_chunks(text_stream: AsyncIterator[bytes]) -> tuple[str, ...]:
     chunks: list[str] = []
-    async for event in sse_events(text_stream, service_name="stt"):
+    async for event in sse_events(text_stream, service_name="stt", schema=STT_OUTBOUND):
         if event.type != "completed":
             continue
-        text = event.payload.get("output", event.payload.get("text", ""))
-        if isinstance(text, str) and text.strip():
-            chunks.append(text.strip())
+        if event.payload.output.strip():
+            chunks.append(event.payload.output.strip())
     return tuple(chunks)
 
 

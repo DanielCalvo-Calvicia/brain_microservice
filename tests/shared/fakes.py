@@ -1,4 +1,5 @@
 import asyncio
+import base64
 
 from application.dtos.outbound_dtos import (
     ExternalHealthResponseDto,
@@ -17,12 +18,47 @@ from application.dtos.outbound_dtos import (
     TTSTextStreamRequestDto,
 )
 from application.services.service import BrainService
-from application.services.steps.stream_internal.external_events import (
-    decode_completed_audio,
-    decode_event_audio,
-    ndjson_events,
-    stream_event_bytes,
+from application.services.steps.stream_internal.external_events import ndjson_events
+from contracts.stream.codec import EventSequencer, encode_ndjson, encode_sse
+from contracts.stream.common.base import EventType
+from contracts.stream.common.start_stream import StartStreamEvent
+from contracts.stream.microservices.microphone.outbound.completed import (
+    MicrophoneCompletedOutboundEvent,
+    MicrophoneCompletedOutboundEventDTO,
 )
+from contracts.stream.microservices.microphone.outbound.partial import (
+    MicrophonePartialEvent,
+    MicrophonePartialEventDTO,
+)
+from contracts.stream.microservices.microphone.outbound.stream_started import (
+    MicrophoneStreamStartedEvent,
+    MicrophoneStreamStartedEventDTO,
+)
+from contracts.stream.microservices.stt.outbound.completed import (
+    STTCompletedOutboundEvent,
+    STTCompletedOutboundEventDTO,
+)
+from contracts.stream.microservices.stt.outbound.partial import (
+    STTPartialOutboundEvent,
+    STTPartialOutboundEventDTO,
+)
+from contracts.stream.microservices.tts.outbound.stream_started import (
+    TTSStreamStartedOutboundEvent,
+    TTSStreamStartedOutboundEventDTO,
+)
+from contracts.stream.microservices.tts.outbound.completed import (
+    CompletedOutboundEvent as TTSCompletedOutboundEvent,
+)
+from contracts.stream.microservices.tts.outbound.completed import (
+    CompletedOutboundEventDTO as TTSCompletedOutboundEventDTO,
+)
+from contracts.stream.microservices.tts.outbound.partial import (
+    PartialOutboundEvent as TTSPartialOutboundEvent,
+)
+from contracts.stream.microservices.tts.outbound.partial import (
+    PartialOutboundEventDTO as TTSPartialOutboundEventDTO,
+)
+from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND, TTS_INBOUND
 from tests.shared.streams import byte_stream, text_stream
 
 
@@ -54,7 +90,9 @@ class DiagnosticMicrophone:
 
     async def start_stream(self, request: MicrophoneStreamRequestDto) -> MicrophoneStreamResponseDto:
         self.start_requests.append(request)
-        return MicrophoneStreamResponseDto(audio_stream=_audio_ndjson_stream(self.chunks), sample_rate=request.sample_rate)
+        return MicrophoneStreamResponseDto(
+            audio_stream=microphone_event_stream(self.chunks, request.sample_rate), sample_rate=request.sample_rate
+        )
 
     async def get_stream(self, request: MicrophoneStreamRequestDto) -> MicrophoneStreamResponseDto:
         return await self.start_stream(request)
@@ -91,11 +129,9 @@ class DiagnosticSTT:
 
     async def set_stream(self, request: STTSetStreamRequestDto) -> None:
         self.stream_requests.append(request)
-        async for event in ndjson_events(request.audio_stream, service_name="stt-test"):
-            if event.type == "partial":
-                self.audio_received += decode_event_audio(event)
-            if event.type == "completed" and not self.audio_received:
-                self.audio_received += decode_completed_audio(event)
+        async for event in ndjson_events(request.audio_stream, service_name="stt-test", schema=STT_INBOUND):
+            if event.type is EventType.PARTIAL:
+                self.audio_received += base64.b64decode(event.payload.bytes_base64)
         self._audio_complete.set()
 
     async def get_stream(self, request: STTTextStreamRequestDto) -> STTStreamResponseDto:
@@ -104,11 +140,13 @@ class DiagnosticSTT:
 
     async def _sse_text_after_audio(self):
         await self._audio_complete.wait()
-        yield b"data: " + stream_event_bytes("stream_started", 1, {}) + b"\n"
-        sequence = 2
+        events = EventSequencer()
+        yield encode_sse(events.next(StartStreamEvent)).encode()
         async for text in text_stream(self.text_chunks):
-            yield b"data: " + stream_event_bytes("completed", sequence, {"reason": "completed", "output": text}) + b"\n"
-            sequence += 1
+            yield encode_sse(events.next(STTPartialOutboundEvent, STTPartialOutboundEventDTO(text=text))).encode()
+            yield encode_sse(
+                events.next(STTCompletedOutboundEvent, STTCompletedOutboundEventDTO(reason="completed", output=text))
+            ).encode()
 
     async def process_batch(self, request: STTBatchRequestDto) -> STTBatchResponseDto:
         self.batch_requests.append(request)
@@ -145,19 +183,14 @@ class DiagnosticTTS:
 
     async def set_text_stream(self, request: TTSTextStreamRequestDto) -> None:
         self.text_stream_requests.append(request)
-        async for event in ndjson_events(request.text_stream, service_name="tts-test"):
-            if event.type == "partial":
-                text = event.payload.get("text", "")
-                if isinstance(text, str):
-                    self.text_received.append(text)
-            if event.type == "completed":
-                output = event.payload.get("output", "")
-                if isinstance(output, str):
-                    self.text_received.append(output)
+        async for event in ndjson_events(request.text_stream, service_name="tts-test", schema=TTS_INBOUND):
+            # a completed event carries the whole text; partials are pieces of that same text
+            if event.type is EventType.COMPLETED:
+                self.text_received.append(event.payload.output)
 
     async def get_stream(self, request: TTSAudioStreamRequestDto) -> TTSAudioStreamResponseDto:
         self.get_requests.append(request)
-        return TTSAudioStreamResponseDto(audio_stream=_audio_ndjson_stream(self.audio_chunks, complete_each_chunk=False))
+        return TTSAudioStreamResponseDto(audio_stream=tts_event_stream(self.audio_chunks, request.sample_rate, request.channels))
 
 
 class DiagnosticSpeaker:
@@ -175,9 +208,9 @@ class DiagnosticSpeaker:
 
     async def play_stream(self, request: SpeakerPlaybackRequestDto) -> SpeakerPlaybackResponseDto:
         self.play_requests.append(request)
-        async for event in ndjson_events(request.audio_stream, service_name="speaker-test"):
-            if event.type == "partial":
-                self.audio_received += decode_event_audio(event)
+        async for event in ndjson_events(request.audio_stream, service_name="speaker-test", schema=SPEAKER_INBOUND):
+            if event.type is EventType.PARTIAL:
+                self.audio_received += base64.b64decode(event.payload.bytes_base64)
         return SpeakerPlaybackResponseDto(success=True, message="played")
 
 
@@ -195,22 +228,54 @@ def build_brain_service(
     )
 
 
-async def _audio_ndjson_stream(chunks: tuple[bytes, ...], *, complete_each_chunk: bool = True):
-    yield stream_event_bytes("stream_started", 1, {})
-    sequence = 2
-    all_chunks: list[bytes] = []
+async def microphone_event_stream(chunks: tuple[bytes, ...], sample_rate: int = 16000):
+    """What the microphone microservice sends on ``GET /stream`` (microphone outbound contract)."""
+    events = EventSequencer()
+    yield encode_ndjson(
+        events.next(
+            MicrophoneStreamStartedEvent,
+            MicrophoneStreamStartedEventDTO(message="started", sample_rate=sample_rate, channels=1),
+        )
+    )
     for chunk in chunks:
-        all_chunks.append(chunk)
-        yield stream_event_bytes("partial", sequence, {"bytes_base64": _base64_audio(chunk)})
-        sequence += 1
-        if complete_each_chunk:
-            yield stream_event_bytes("completed", sequence, {"reason": "completed", "bytes_base64": _base64_audio(chunk)})
-            sequence += 1
-    if not complete_each_chunk:
-        yield stream_event_bytes("completed", sequence, {"reason": "completed", "output_bytes_base64": _base64_audio(b"".join(all_chunks))})
+        yield encode_ndjson(events.next(MicrophonePartialEvent, MicrophonePartialEventDTO(_base64_audio(chunk))))
+    yield encode_ndjson(
+        events.next(
+            MicrophoneCompletedOutboundEvent,
+            MicrophoneCompletedOutboundEventDTO(reason="completed", output_bytes_base64=""),
+        )
+    )
+
+
+async def tts_event_stream(chunks: tuple[bytes, ...], sample_rate: int = 24000, channels: int = 1):
+    """What TTS sends on ``GET /process/stream/get``: one spoken text made of ``chunks``."""
+    events = EventSequencer()
+    yield encode_ndjson(
+        events.next(
+            TTSStreamStartedOutboundEvent,
+            TTSStreamStartedOutboundEventDTO(sample_rate=sample_rate, channels=channels),
+        )
+    )
+    for index, chunk in enumerate(chunks):
+        yield encode_ndjson(
+            events.next(
+                TTSPartialOutboundEvent,
+                TTSPartialOutboundEventDTO(bytes_base64=_base64_audio(chunk), byte_count=len(chunk), chunk_index=index),
+            )
+        )
+    audio = b"".join(chunks)
+    yield encode_ndjson(
+        events.next(
+            TTSCompletedOutboundEvent,
+            TTSCompletedOutboundEventDTO(
+                reason="completed",
+                output_bytes_base64=_base64_audio(audio),
+                total_bytes=len(audio),
+                chunk_count=len(chunks),
+            ),
+        )
+    )
 
 
 def _base64_audio(chunk: bytes) -> str:
-    import base64
-
     return base64.b64encode(chunk).decode("ascii")

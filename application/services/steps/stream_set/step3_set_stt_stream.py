@@ -2,9 +2,11 @@ import asyncio
 
 from application.dtos.outbound_dtos import STTSetStreamRequestDto
 from application.ports.outbound_ports import STTPort
-from domain.console import console_log
+from shared_logging import get_logger
 
 from ..context import AsyncStreamPipe, VoicePipelineContext, verify_stt_input
+
+logger = get_logger(__name__)
 
 
 class Step3SetSTTStream:
@@ -14,7 +16,7 @@ class Step3SetSTTStream:
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
         microphone_output = context.require_microphone_output()
-        console_log("flow4-attach", "pipeline step 3: setting STT input stream connector")
+        logger.info("pipeline step 3: setting STT input stream connector")
         stt_stream_in_pipe = AsyncStreamPipe[bytes]("stt-stream-in")
         context.stt_stream_in_pipe = stt_stream_in_pipe
         stt_input = STTSetStreamRequestDto(
@@ -31,4 +33,4 @@ class Step3SetSTTStream:
         if task.done():
             await task
         context.stt_input_task = task
-        console_log("flow4-attach", "STT input stream connector started")
+        logger.info("STT input stream connector started")

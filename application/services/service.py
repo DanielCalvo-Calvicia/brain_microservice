@@ -1,5 +1,8 @@
 import asyncio
 
+from contracts.stream.common.base import EventType
+from contracts.stream.schemas import STT_OUTBOUND
+
 from application.dtos.outbound_dtos import (
     MicrophoneStreamRequestDto,
     SpeakerPlaybackRequestDto,
@@ -35,9 +38,11 @@ from application.services.steps.context import (
 from application.services.steps.stream_internal.external_events import raise_for_stream_error, sse_events, text_stream_as_ndjson_events
 from application.services.steps.stream_internal.step10_tts_to_speaker import Step10TTSStreamToInternalStreamToSpeakerStream
 from application.services.steps.stream_internal.step8_mic_to_stt import Step8MicStreamToInternalStreamToSTTStream
-from domain.console import console_log
+from shared_logging import get_logger, span
 from domain.errors import ExternalServiceError
 from domain.models import ServiceStatus
+
+logger = get_logger(__name__)
 
 
 class BrainService(BrainServicePort):
@@ -55,32 +60,35 @@ class BrainService(BrainServicePort):
         self.voice_pipeline = VoicePipelineFlow(microphone_port, stt_port, tts_port, speaker_port)
 
     async def check_integrations(self) -> HealthCheckServiceResponseDto:
-        console_log("flow1-health", "checking external microservice health")
+        logger.info("checking external microservice health")
         services = (
             await self._check("microphone", self.microphone_port),
             await self._check("stt", self.stt_port),
             await self._check("tts", self.tts_port),
             await self._check("speaker", self.speaker_port),
         )
-        console_log("flow1-health", "external microservice health checked", services=len(services))
+        logger.info("external microservice health checked", services=len(services))
         return HealthCheckServiceResponseDto(services=services)
 
     async def transcribe_batch(
         self, request: BatchTranscriptionServiceRequestDto
     ) -> BatchTranscriptionServiceResponseDto:
-        console_log("flow4-attach", "starting batch transcription", audio_bytes=len(request.audio_data), sample_rate=request.sample_rate)
+        logger.info(
+            "starting batch transcription",
+            audio_bytes=len(request.audio_data),
+            sample_rate=request.sample_rate,
+        )
         response = await self.stt_port.process_batch(
             STTBatchRequestDto(audio_data=request.audio_data, sample_rate=request.sample_rate)
         )
-        console_log("flow4-attach", "batch transcription finished", text_chars=len(response.text))
+        logger.info("batch transcription finished", text_chars=len(response.text))
         return BatchTranscriptionServiceResponseDto(text=response.text)
 
     async def transcribe_microphone(
         self, request: MicrophoneTranscriptionServiceRequestDto
     ) -> MicrophoneTranscriptionServiceResponseDto:
         try:
-            console_log(
-                "flow4-attach",
+            logger.info(
                 "starting microphone transcription attachment",
                 sample_rate=request.sample_rate,
                 chunk_size=request.chunk_size,
@@ -100,7 +108,11 @@ class BrainService(BrainServicePort):
             )
             verify_stt_input(stt_input)
             stt_input_task = asyncio.create_task(self.stt_port.set_stream(stt_input))
-            mic_to_stt = Step8MicStreamToInternalStreamToSTTStream(microphone_output.audio_stream, stt_stream_in_pipe)
+            mic_to_stt = Step8MicStreamToInternalStreamToSTTStream(
+                microphone_output.audio_stream,
+                stt_stream_in_pipe,
+                expected_sample_rate=microphone_output.sample_rate,
+            )
             mic_parse_task = asyncio.create_task(mic_to_stt.mic_stream_to_internal_stream())
             mic_forward_task = asyncio.create_task(mic_to_stt.internal_stream_to_stt_stream())
             await asyncio.sleep(0)
@@ -118,20 +130,26 @@ class BrainService(BrainServicePort):
                 )
                 verify_stt_output(stt_output)
                 segments: list[str] = []
-                async for event in sse_events(stt_output.text_stream, service_name="stt"):
-                    if event.type in ("stream_started", "heartbeat", "partial"):
+                async for event in sse_events(stt_output.text_stream, service_name="stt", schema=STT_OUTBOUND):
+                    if event.type in (EventType.START_STREAM, EventType.HEARTBEAT, EventType.PARTIAL):
                         continue
-                    if event.type == "completed":
-                        text = event.payload.get("output", event.payload.get("text", ""))
-                        cleaned = text.strip() if isinstance(text, str) else ""
+                    if event.type is EventType.COMPLETED:
+                        cleaned = event.payload.output.strip()
                         if cleaned:
                             segments.append(cleaned)
-                            console_log("flow4-attach", "received STT transcription segment", segment=len(segments), chars=len(cleaned))
+                            logger.info(
+                                "received STT transcription segment",
+                                segment=len(segments),
+                                chars=len(cleaned),
+                            )
                         if len(segments) >= request.max_segments:
-                            console_log("flow4-attach", "microphone transcription segment limit reached", max_segments=request.max_segments)
+                            logger.info(
+                                "microphone transcription segment limit reached",
+                                max_segments=request.max_segments,
+                            )
                             break
                         continue
-                    if event.type == "error":
+                    if event.type is EventType.ERROR:
                         raise_for_stream_error(event, service_name="stt")
             finally:
                 for task in (mic_parse_task, mic_forward_task):
@@ -142,7 +160,7 @@ class BrainService(BrainServicePort):
                     except asyncio.CancelledError:
                         pass
                 await _finish_task(stt_input_task, "STT input forwarding task cancelled for transcription")
-            console_log("flow4-attach", "microphone transcription finished", segments=len(segments))
+            logger.info("microphone transcription finished", segments=len(segments))
             return MicrophoneTranscriptionServiceResponseDto(segments=tuple(segments))
         except Exception:
             await _stop_microphone_safely(self.microphone_port, "microphone transcription error")
@@ -151,7 +169,12 @@ class BrainService(BrainServicePort):
     async def play_text(
         self, request: TextToSpeechPlaybackServiceRequestDto
     ) -> TextToSpeechPlaybackServiceResponseDto:
-        console_log("flow4-attach", "starting text playback attachment", text_chars=len(request.text), sample_rate=request.sample_rate, channels=request.channels)
+        logger.info(
+            "starting text playback attachment",
+            text_chars=len(request.text),
+            sample_rate=request.sample_rate,
+            channels=request.channels,
+        )
         await self.tts_port.set_text_stream(
             TTSTextStreamRequestDto(
                 text_stream=text_stream_as_ndjson_events(_single_text_stream(request.text)),
@@ -179,6 +202,7 @@ class BrainService(BrainServicePort):
             tts_output.audio_stream,
             speaker_stream_in_pipe,
             completed_outputs_to_read=1,
+            expected_format=(request.sample_rate, request.channels),
         )
         tts_parse_task = asyncio.create_task(tts_to_speaker.tts_stream_to_internal_stream())
         tts_forward_task = asyncio.create_task(tts_to_speaker.internal_stream_to_speaker_stream())
@@ -195,24 +219,29 @@ class BrainService(BrainServicePort):
                 except asyncio.CancelledError:
                     pass
         verify_speaker_response(speaker_response)
-        console_log("flow4-attach", "text playback attachment finished", success=speaker_response.success, detail=speaker_response.message)
+        logger.info(
+            "text playback attachment finished",
+            success=speaker_response.success,
+            detail=speaker_response.message,
+        )
         return TextToSpeechPlaybackServiceResponseDto(success=speaker_response.success, message=speaker_response.message)
 
     async def run_voice_pipeline(
         self, request: VoicePipelineServiceRequestDto
     ) -> VoicePipelineServiceResponseDto:
-        return await self.voice_pipeline.run(request)
+        with span("voice pipeline"):
+            return await self.voice_pipeline.run(request)
 
     async def _check(self, name: str, port: HealthCheckPort) -> ServiceStatus:
         try:
-            console_log("flow1-health", "checking microservice", service=name)
+            logger.info("checking microservice", service=name)
             response = await port.check_health()
             return ServiceStatus(name=name, is_available=response.is_available, detail=response.detail)
         except ExternalServiceError as exc:
-            console_log("flow1-health", "microservice check failed", service=name, error=exc.message)
+            logger.error("microservice check failed", service=name, error=exc.message)
             return ServiceStatus(name=name, is_available=False, detail=exc.message)
         except Exception as exc:
-            console_log("flow1-health", "microservice check failed", service=name, error=str(exc))
+            logger.error("microservice check failed", service=name, error=str(exc))
             return ServiceStatus(name=name, is_available=False, detail=str(exc))
 
 
@@ -224,7 +253,7 @@ async def _finish_task(task: asyncio.Task, cancelled_message: str) -> None:
     try:
         await task
     except asyncio.CancelledError:
-        console_log("flow4-attach", cancelled_message)
+        logger.info(cancelled_message)
 
 
 async def _single_text_stream(text: str):
@@ -234,7 +263,7 @@ async def _single_text_stream(text: str):
 
 async def _stop_microphone_safely(microphone_port: MicrophonePort, reason: str) -> None:
     try:
-        console_log("brain-service", "stopping microphone via API", reason=reason)
+        logger.info("stopping microphone via API", reason=reason)
         await microphone_port.stop_stream()
     except Exception as exc:
-        console_log("brain-service", "microphone stop failed", reason=reason, error=str(exc))
+        logger.error("microphone stop failed", reason=reason, error=str(exc))

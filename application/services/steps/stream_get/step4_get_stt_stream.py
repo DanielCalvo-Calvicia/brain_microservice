@@ -2,10 +2,12 @@ import asyncio
 
 from application.dtos.outbound_dtos import STTTextStreamRequestDto
 from application.ports.outbound_ports import STTPort
-from domain.console import console_log
+from shared_logging import get_logger
 from domain.errors import ExternalServiceUnavailableError
 
 from ..context import VoicePipelineContext, verify_stt_output
+
+logger = get_logger(__name__)
 
 
 class Step4GetSTTStream:
@@ -15,7 +17,7 @@ class Step4GetSTTStream:
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
         microphone_output = context.require_microphone_output()
-        console_log("flow4-attach", "pipeline step 4: getting STT stream")
+        logger.info("pipeline step 4: getting STT stream")
         stt_output = await _open_stream_after_set_is_ready(
             lambda: self.stt_port.get_stream(
                 STTTextStreamRequestDto(
@@ -40,8 +42,7 @@ async def _open_stream_after_set_is_ready(open_stream, *, component: str, attemp
                 raise
             if attempt == attempts:
                 raise
-            console_log(
-                "flow4-attach",
+            logger.info(
                 "stream output not ready after set; retrying",
                 service=component,
                 attempt=attempt,

@@ -24,7 +24,9 @@ from application.dtos.outbound_dtos import (
 )
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
 from application.services.service import BrainService
-from application.services.steps.stream_internal.external_events import decode_event_audio, ndjson_events, stream_event_bytes
+from application.services.steps.stream_internal.external_events import ndjson_events
+from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND, TTS_INBOUND
+from tests.shared.wire import stream_event_bytes
 
 
 def _random_byte_chunks(rng: random.Random, count: int, *, min_size: int, max_size: int) -> tuple[bytes, ...]:
@@ -62,14 +64,18 @@ class AuditedMicrophone:
         self.stop_count += 1
 
     async def _stream_chunks(self) -> AsyncIterator[bytes]:
-        yield stream_event_bytes("stream_started", 1, {})
+        yield stream_event_bytes(
+            "stream_started", 1, {"message": "started", "sample_rate": 16000, "channels": 1}
+        )
         sequence = 2
         for index, chunk in enumerate(self.chunks):
             self.events.append(f"microphone:emit:{index}")
             encoded = base64.b64encode(chunk).decode("ascii")
             yield stream_event_bytes("partial", sequence, {"bytes_base64": encoded})
             sequence += 1
-            yield stream_event_bytes("completed", sequence, {"reason": "completed", "bytes_base64": encoded})
+            yield stream_event_bytes(
+                "completed", sequence, {"reason": "completed", "output_bytes_base64": ""}
+            )
             sequence += 1
 
 
@@ -89,10 +95,10 @@ class AuditedSTT:
     async def set_stream(self, request: STTSetStreamRequestDto) -> None:
         self.events.append("stt:start")
         self.stream_requests.append(request)
-        async for event in ndjson_events(request.audio_stream, service_name="stt-test"):
+        async for event in ndjson_events(request.audio_stream, service_name="stt-test", schema=STT_INBOUND):
             if event.type != "partial":
                 continue
-            chunk = decode_event_audio(event)
+            chunk = base64.b64decode(event.payload.bytes_base64)
             self.events.append(f"stt:receive_audio:{len(self.audio_chunks_received)}")
             self.audio_chunks_received.append(chunk)
         self.events.append("stt:audio_complete")
@@ -113,6 +119,8 @@ class AuditedSTT:
         sequence = 2
         for index, text in enumerate(self.text_chunks):
             self.events.append(f"stt:emit_text:{index}")
+            yield b"data: " + stream_event_bytes("partial", sequence, {"text": text}) + b"\n"
+            sequence += 1
             yield b"data: " + stream_event_bytes("completed", sequence, {"reason": "completed", "output": text}) + b"\n"
             sequence += 1
 
@@ -136,9 +144,9 @@ class AuditedTTS:
     async def set_text_stream(self, request: TTSTextStreamRequestDto) -> None:
         self.events.append("tts:start_text_input")
         self.text_stream_requests.append(request)
-        async for event in ndjson_events(request.text_stream, service_name="tts-test"):
+        async for event in ndjson_events(request.text_stream, service_name="tts-test", schema=TTS_INBOUND):
             if event.type == "completed":
-                text = event.payload.get("output", "")
+                text = event.payload.output
                 self.events.append(f"tts:receive_text:{len(self.text_received)}")
                 self.text_received.append(text)
         self.events.append("tts:text_complete")
@@ -149,17 +157,30 @@ class AuditedTTS:
         return TTSAudioStreamResponseDto(audio_stream=self._stream_audio())
 
     async def _stream_audio(self) -> AsyncIterator[bytes]:
-        yield stream_event_bytes("stream_started", 1, {})
+        yield stream_event_bytes("stream_started", 1, {"sample_rate": 24000, "channels": 1})
         sequence = 2
         all_chunks: list[bytes] = []
         for index, chunk in enumerate(self.audio_chunks):
             self.events.append(f"tts:emit_audio:{index}")
             all_chunks.append(chunk)
             encoded = base64.b64encode(chunk).decode("ascii")
-            yield stream_event_bytes("partial", sequence, {"bytes_base64": encoded})
+            yield stream_event_bytes(
+                "partial",
+                sequence,
+                {"bytes_base64": encoded, "byte_count": len(chunk), "chunk_index": index},
+            )
             sequence += 1
         encoded_output = base64.b64encode(b"".join(all_chunks)).decode("ascii")
-        yield stream_event_bytes("completed", sequence, {"reason": "completed", "output_bytes_base64": encoded_output})
+        yield stream_event_bytes(
+            "completed",
+            sequence,
+            {
+                "reason": "completed",
+                "output_bytes_base64": encoded_output,
+                "total_bytes": sum(len(c) for c in all_chunks),
+                "chunk_count": len(all_chunks),
+            },
+        )
 
 
 class AuditedSpeaker:
@@ -174,10 +195,10 @@ class AuditedSpeaker:
     async def play_stream(self, request: SpeakerPlaybackRequestDto) -> SpeakerPlaybackResponseDto:
         self.events.append("speaker:start")
         self.play_requests.append(request)
-        async for event in ndjson_events(request.audio_stream, service_name="speaker-test"):
+        async for event in ndjson_events(request.audio_stream, service_name="speaker-test", schema=SPEAKER_INBOUND):
             if event.type != "partial":
                 continue
-            chunk = decode_event_audio(event)
+            chunk = base64.b64decode(event.payload.bytes_base64)
             self.events.append(f"speaker:receive_audio:{len(self.audio_chunks_received)}")
             self.audio_chunks_received.append(chunk)
         self.events.append("speaker:complete")

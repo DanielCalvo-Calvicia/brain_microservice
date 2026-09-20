@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from fastapi import FastAPI
+from shared_logging import TracingMiddleware
 
 from application.services.service import BrainService
 from composition_root.config import AppConfig
@@ -78,6 +79,7 @@ def generate_brain_dependency_from_core(core: BrainCoreDependency) -> BrainDepen
         openapi_url="/openapi.json",
     )
     adapter_inbound = FastApiAdapter(service=core.service, app=app)
+    app.add_middleware(TracingMiddleware)  # added last so it is outermost
     return BrainDependency(
         adapter_inbound=adapter_inbound,
         service=core.service,
@@ -97,5 +99,4 @@ def _http_config(name: str, base_url: str, config: AppConfig) -> HttpServiceConf
         service_name=name,
         base_url=base_url,
         timeout_seconds=config.provider_timeout_seconds,
-        api_key=config.provider_api_key,
     )

@@ -1,8 +1,10 @@
 from application.dtos.outbound_dtos import MicrophoneStreamRequestDto
 from application.ports.outbound_ports import MicrophonePort
-from domain.console import console_log
+from shared_logging import get_logger
 
 from ..context import VoicePipelineContext, verify_microphone_output
+
+logger = get_logger(__name__)
 
 
 class Step2GetMicrophoneStream:
@@ -11,7 +13,7 @@ class Step2GetMicrophoneStream:
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
-        console_log("flow4-attach", "pipeline step 2: getting microphone stream")
+        logger.info("pipeline step 2: getting microphone stream")
         microphone_output = await self.microphone_port.start_stream(
             MicrophoneStreamRequestDto(
                 sample_rate=request.microphone_sample_rate,
