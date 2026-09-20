@@ -5,7 +5,7 @@ the shared codec. This module only adapts contract violations to Brain's error t
 text framing Brain needs when it feeds TTS.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from contracts.stream.codec import (
@@ -35,6 +35,24 @@ logger = get_logger(__name__)
 TEXT_PARTIAL_CHUNK_CHARS = 4096
 
 
+def stage_encoder(stage: str) -> Callable[[BaseEvent[Any]], bytes]:
+    """An ``encode_ndjson`` that also logs each event it sends, tagged with ``stage`` (``brain->tts``)."""
+
+    def encode(event: BaseEvent[Any]) -> bytes:
+        log_stream_event(stage, event)
+        return encode_ndjson(event)
+
+    return encode
+
+
+def log_stream_event(stage: str, event: BaseEvent[Any]) -> None:
+    """Log one whole stream event (payload included) for a pipeline stage such as ``mic->brain``.
+
+    ``stream_stage`` marks these records: the deployment console shows them next to the errors.
+    """
+    logger.info("stream event", stream_stage=stage, stream_event=event.to_dict())
+
+
 async def ndjson_events(
     byte_stream: AsyncIterator[bytes], *, service_name: str, schema: StreamSchema
 ) -> AsyncIterator[BaseEvent[Any]]:
@@ -61,6 +79,7 @@ async def _events(
 ) -> AsyncIterator[BaseEvent[Any]]:
     try:
         async for event in iter_events(byte_stream, schema, framing=framing):
+            log_stream_event(f"{service_name}->brain", event)
             yield event
     except ContractViolation as error:
         raise ExternalServiceInvalidResponseError(service_name, str(error)) from error
@@ -89,17 +108,18 @@ async def text_stream_as_ndjson_events(
     optional run of ``partial`` pieces (long texts only) and one ``completed`` with the whole text.
     """
     events = EventSequencer()
-    yield encode_ndjson(events.next(StartStreamEvent))
+    send = stage_encoder("brain->tts")
+    yield send(events.next(StartStreamEvent))
     async for text in text_stream:
         cleaned = text.strip()
         if not cleaned:
             continue
         if len(cleaned) > partial_chunk_chars:
             for piece in _text_chunks(cleaned, partial_chunk_chars):
-                yield encode_ndjson(
+                yield send(
                     events.next(TTSPartialInboundEvent, TTSPartialInboundEventDTO(text=piece))
                 )
-        yield encode_ndjson(
+        yield send(
             events.next(
                 TTSCompletedInboundEvent,
                 TTSCompletedInboundEventDTO(reason="completed", output=cleaned),

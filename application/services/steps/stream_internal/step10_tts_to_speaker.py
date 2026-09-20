@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
-from contracts.stream.codec import EventSequencer, encode_ndjson
+from contracts.stream.codec import EventSequencer
 from contracts.stream.common.base import BaseEvent, EventType
 from contracts.stream.common.error import ErrorEvent, ErrorEventDTO
 from contracts.stream.microservices.speaker.inbound.completed import (
@@ -22,7 +22,7 @@ from shared_logging import get_logger
 from domain.errors import ExternalServiceInvalidResponseError
 
 from ..context import AsyncStreamPipe, VoicePipelineContext
-from .external_events import ndjson_events, raise_for_stream_error
+from .external_events import ndjson_events, raise_for_stream_error, stage_encoder
 
 logger = get_logger(__name__)
 
@@ -136,7 +136,7 @@ class Step10TTSStreamToInternalStreamToSpeakerStream:
             async for event in self.internal_stream.stream:
                 if event.type is EventType.ERROR:
                     raise RuntimeError(event.payload.message or "TTS-to-speaker internal stream error")
-                await self.speaker_stream_in.put(encode_ndjson(event))
+                await self.speaker_stream_in.put(stage_encoder("brain->speaker")(event))
         except Exception as exc:
             await self.speaker_stream_in.fail(exc)
             raise
