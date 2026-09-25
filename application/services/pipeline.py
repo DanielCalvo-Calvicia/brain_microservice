@@ -1,5 +1,7 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 
+from application.dtos.outbound_dtos import AIAgentMessageResponseDto, MotorDirectiveDto, StepperMoveResponseDto
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto, VoicePipelineServiceResponseDto
 from application.ports.outbound_ports import MicrophonePort, SpeakerPort, STTPort, TTSPort
 from application.services.steps.context import VoicePipelineContext, verify_speaker_response
@@ -27,8 +29,12 @@ class VoicePipelineFlow:
         stt_port: STTPort,
         tts_port: TTSPort,
         speaker_port: SpeakerPort,
+        ask_ai_agent: Callable[[str], Awaitable[AIAgentMessageResponseDto]],
+        move_arm: Callable[[MotorDirectiveDto], Awaitable[StepperMoveResponseDto]],
     ) -> None:
         self.microphone_port = microphone_port
+        self.ask_ai_agent = ask_ai_agent
+        self.move_arm = move_arm
         self.health_step = Step1CheckHealth(microphone_port, stt_port, tts_port, speaker_port)
         self.get_microphone_step = Step2GetMicrophoneStream(microphone_port)
         self.set_stt_step = Step3SetSTTStream(stt_port)
@@ -66,6 +72,8 @@ class VoicePipelineFlow:
             stt_to_tts = Step9STTStreamToInternalStreamToTTSStream(
                 context.require_stt_output().text_stream,
                 context.require_tts_stream_in_pipe(),
+                ask_ai_agent=self.ask_ai_agent,
+                move_arm=self.move_arm,
             )
             await stt_to_tts.run(context)
 

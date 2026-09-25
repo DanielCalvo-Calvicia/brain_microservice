@@ -57,6 +57,8 @@ def test_brain_http_app_continues_the_incoming_trace() -> None:
         stt_adapter=None,
         tts_adapter=None,
         speaker_adapter=None,
+        ai_agent_adapter=None,
+        stepper_adapter=None,
     )
     app = generate_brain_dependency_from_core(core).adapter_inbound.get_app
 

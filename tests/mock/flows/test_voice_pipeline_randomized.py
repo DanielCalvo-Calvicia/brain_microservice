@@ -24,6 +24,7 @@ from application.dtos.outbound_dtos import (
 )
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
 from application.services.service import BrainService
+from tests.shared.fakes import DiagnosticAIAgent, DiagnosticStepper
 from application.services.steps.stream_internal.external_events import ndjson_events
 from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND, TTS_INBOUND
 from tests.shared.wire import stream_event_bytes
@@ -211,14 +212,17 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
     microphone_chunks = _random_byte_chunks(rng, 7, min_size=16, max_size=128)
     stt_text_chunks = _random_text_chunks(rng, 5)
     tts_audio_chunks = _random_byte_chunks(rng, 4, min_size=32, max_size=256)
-    expected_tts_text = tuple(text.strip() for text in stt_text_chunks if text.strip())[:3]
+    # max_text_segments=1 below means Step9 stops at the first non-blank STT chunk (unstripped)
+    # and asks ai-agent with just that; only its one reply is ever forwarded to TTS.
+    expected_ai_agent_input = next(text for text in stt_text_chunks if text.strip())
+    ai_agent = DiagnosticAIAgent(response="scripted reply")
     events: list[str] = []
 
     microphone = AuditedMicrophone(microphone_chunks, events)
     stt = AuditedSTT(stt_text_chunks, events)
     tts = AuditedTTS(tts_audio_chunks, events)
     speaker = AuditedSpeaker(events)
-    service = BrainService(microphone, stt, tts, speaker)
+    service = BrainService(microphone, stt, tts, speaker, ai_agent, DiagnosticStepper())
 
     response = await service.run_voice_pipeline(
         VoicePipelineServiceRequestDto(
@@ -226,7 +230,7 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
             microphone_chunk_size=1024,
             stt_silence_threshold=150,
             stt_silence_limit_seconds=0.5,
-            max_text_segments=len(expected_tts_text),
+            max_text_segments=1,
             tts_sample_rate=24000,
             speaker_channels=1,
         )
@@ -234,7 +238,7 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
 
     assert response.success is True
     assert response.message == "played"
-    assert response.text_segments_forwarded == len(expected_tts_text)
+    assert response.text_segments_forwarded == 1
 
     assert microphone.start_requests == [MicrophoneStreamRequestDto(sample_rate=16000, chunk_size=1024)]
     assert microphone.stop_count == 0
@@ -244,8 +248,9 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
     assert stt.stream_requests[0].silence_limit_seconds == 0.5
     assert tuple(stt.audio_chunks_received) == microphone_chunks
 
+    assert ai_agent.last_message.message == expected_ai_agent_input
     assert tts.set_requests == []
-    assert tuple(tts.text_received) == expected_tts_text
+    assert tuple(tts.text_received) == ("scripted reply",)
     assert len(tts.text_stream_requests) == 1
     assert tts.text_stream_requests[0].sample_rate == 24000
     assert tts.text_stream_requests[0].channels == 1
@@ -254,7 +259,7 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
             sample_rate=24000,
             channels=1,
             keep_open_after_completed=True,
-            completed_outputs_to_read=len(expected_tts_text),
+            completed_outputs_to_read=1,
         )
     ]
     assert tuple(speaker.audio_chunks_received) == tts_audio_chunks

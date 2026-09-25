@@ -2,9 +2,16 @@ import asyncio
 import base64
 
 from application.dtos.outbound_dtos import (
+    AIAgentEndSessionRequestDto,
+    AIAgentEndSessionResponseDto,
+    AIAgentMessageRequestDto,
+    AIAgentMessageResponseDto,
+    AIAgentStartSessionRequestDto,
+    AIAgentStartSessionResponseDto,
     ExternalHealthResponseDto,
     MicrophoneStreamRequestDto,
     MicrophoneStreamResponseDto,
+    MotorDirectiveDto,
     SpeakerPlaybackRequestDto,
     SpeakerPlaybackResponseDto,
     STTBatchRequestDto,
@@ -12,6 +19,7 @@ from application.dtos.outbound_dtos import (
     STTSetStreamRequestDto,
     STTStreamResponseDto,
     STTTextStreamRequestDto,
+    StepperMoveResponseDto,
     TTSAudioStreamRequestDto,
     TTSAudioStreamResponseDto,
     TTSSetStreamRequestDto,
@@ -214,17 +222,87 @@ class DiagnosticSpeaker:
         return SpeakerPlaybackResponseDto(success=True, message="played")
 
 
+class DiagnosticAIAgent:
+    """``response=None`` echoes the received message back (useful where a test cares that the
+    text which reaches TTS is unchanged, e.g. audio-format/duration checks)."""
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        session_id: str = "diagnostic-session",
+        response: str | None = "diagnostic reply",
+        directive: MotorDirectiveDto | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        self.available = available
+        self.session_id = session_id
+        self.response = response
+        self.directive = directive
+        self.error_code = error_code
+        self.start_requests: list[AIAgentStartSessionRequestDto] = []
+        self.message_requests: list[AIAgentMessageRequestDto] = []
+        self.end_requests: list[AIAgentEndSessionRequestDto] = []
+
+    @property
+    def last_message(self) -> AIAgentMessageRequestDto | None:
+        return self.message_requests[-1] if self.message_requests else None
+
+    async def check_health(self) -> ExternalHealthResponseDto:
+        return ExternalHealthResponseDto(self.available, "ok" if self.available else "down")
+
+    async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
+        self.start_requests.append(request)
+        return AIAgentStartSessionResponseDto(success=True, session_id=self.session_id, message="Session started successfully.")
+
+    async def message(self, request: AIAgentMessageRequestDto) -> AIAgentMessageResponseDto:
+        self.message_requests.append(request)
+        return AIAgentMessageResponseDto(
+            success=self.error_code is None,
+            response=self.response if self.response is not None else request.message,
+            directive=self.directive,
+            error_code=self.error_code,
+        )
+
+    async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
+        self.end_requests.append(request)
+        return AIAgentEndSessionResponseDto(success=True, message="Session ended successfully.")
+
+
+class DiagnosticStepper:
+    def __init__(self, *, available: bool = True, success: bool = True, message: str = "moved") -> None:
+        self.available = available
+        self.success = success
+        self.message = message
+        self.move_requests: list[MotorDirectiveDto] = []
+
+    @property
+    def last_move(self) -> MotorDirectiveDto | None:
+        return self.move_requests[-1] if self.move_requests else None
+
+    async def check_health(self) -> ExternalHealthResponseDto:
+        return ExternalHealthResponseDto(self.available, "ok" if self.available else "down")
+
+    async def move(self, directive: MotorDirectiveDto) -> StepperMoveResponseDto:
+        self.move_requests.append(directive)
+        return StepperMoveResponseDto(success=self.success, message=self.message)
+
+
 def build_brain_service(
     microphone: DiagnosticMicrophone | None = None,
     stt: DiagnosticSTT | None = None,
     tts: DiagnosticTTS | None = None,
     speaker: DiagnosticSpeaker | None = None,
+    ai_agent: DiagnosticAIAgent | None = None,
+    stepper: DiagnosticStepper | None = None,
 ) -> BrainService:
     return BrainService(
         microphone or DiagnosticMicrophone(),
         stt or DiagnosticSTT(),
         tts or DiagnosticTTS(),
         speaker or DiagnosticSpeaker(),
+        ai_agent or DiagnosticAIAgent(),
+        stepper or DiagnosticStepper(),
     )
 
 

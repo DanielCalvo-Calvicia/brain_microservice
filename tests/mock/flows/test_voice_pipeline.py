@@ -28,5 +28,7 @@ async def test_full_voice_pipeline_connects_mic_to_stt_to_tts_to_speaker() -> No
     assert microphone.stop_count == 0
     assert stt.audio_received == b"mic"
     assert tts.set_requests == []
-    assert tts.text_received == ["debug"]
+    # STT's raw text is never spoken directly: it is sent to ai-agent, and its reply (the
+    # DiagnosticAIAgent default) is what TTS actually receives.
+    assert tts.text_received == ["diagnostic reply"]
     assert speaker.audio_received == b"spoken-debug"

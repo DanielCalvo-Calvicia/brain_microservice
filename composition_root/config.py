@@ -24,6 +24,15 @@ class AppConfig:
     tts_get_stream_endpoint: str
     speaker_base_url: str
     speaker_play_stream_endpoint: str
+    ai_agent_base_url: str
+    ai_agent_start_session_endpoint: str
+    ai_agent_message_endpoint: str
+    ai_agent_end_session_endpoint: str
+    stepper_base_url: str
+    stepper_rotate_endpoint_template: str
+    stepper_left_arm_stepper_id: str
+    stepper_right_arm_stepper_id: str
+    stepper_default_rpm: float
     startup_preflight_enabled: bool
     startup_preflight_timeout_seconds: float
     microservice_ready_poll_interval_seconds: float
@@ -87,6 +96,32 @@ def load_config() -> AppConfig:
             "/process/stream/set",
             fallback_env_name="SPEAKER_STREAM_ENDPOINT",
         ),
+        ai_agent_base_url=_base_url("AI_AGENT_BASE_URL", "http://127.0.0.1:7998"),
+        ai_agent_start_session_endpoint=_endpoint(
+            "AI_AGENT_START_SESSION_ENDPOINT",
+            "http://127.0.0.1:7998/session/start",
+            "/session/start",
+        ),
+        ai_agent_message_endpoint=_endpoint(
+            "AI_AGENT_MESSAGE_ENDPOINT",
+            "http://127.0.0.1:7998/session/message",
+            "/session/message",
+        ),
+        ai_agent_end_session_endpoint=_endpoint(
+            "AI_AGENT_END_SESSION_ENDPOINT",
+            "http://127.0.0.1:7998/session/end",
+            "/session/end",
+        ),
+        stepper_base_url=_base_url("STEPPER_BASE_URL", "http://127.0.0.1:8005"),
+        # A path template, not a fixed endpoint: {stepper_id} is filled in per call, so this does
+        # not go through _endpoint()'s full-URL normalization.
+        stepper_rotate_endpoint_template=os.getenv("STEPPER_ROTATE_ENDPOINT_TEMPLATE", "/control/{stepper_id}/rotate"),
+        # ai-agent only knows "left"/"right"; this is the only place that maps an arm to the
+        # stepper_id stepper itself is configured with (its own STEPPER_CONFIGS).
+        stepper_left_arm_stepper_id=os.getenv("STEPPER_LEFT_ARM_STEPPER_ID", "stepper_1"),
+        stepper_right_arm_stepper_id=os.getenv("STEPPER_RIGHT_ARM_STEPPER_ID", "stepper_2"),
+        # A MotorDirective carries no speed, only degrees/direction.
+        stepper_default_rpm=_float_env("STEPPER_DEFAULT_RPM", 15.0),
         startup_preflight_enabled=_bool_env("STARTUP_PREFLIGHT_ENABLED", True),
         startup_preflight_timeout_seconds=_float_env("STARTUP_PREFLIGHT_TIMEOUT_SECONDS", 60.0),
         microservice_ready_poll_interval_seconds=_float_env("MICROSERVICE_READY_POLL_INTERVAL_SECONDS", 2.0),

@@ -19,6 +19,8 @@ async def test_startup_pipeline_starts_and_merges_all_streams() -> None:
     assert microphone.stopped is False
     assert stt.audio_received == b"mic"
     assert tts.set_requests == []
-    assert tts.text_received == ["startup"]
+    # STT's raw text is never spoken directly: it is sent to ai-agent, and its reply (the
+    # DiagnosticAIAgent default) is what TTS actually receives.
+    assert tts.text_received == ["diagnostic reply"]
     assert tts.get_requests
     assert speaker.audio_received == b"audio"

@@ -91,3 +91,53 @@ class SpeakerPlaybackRequestDto:
 class SpeakerPlaybackResponseDto:
     success: bool
     message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AIAgentStartSessionRequestDto:
+    username: str = "oblivion"
+
+
+@dataclass(frozen=True, slots=True)
+class AIAgentStartSessionResponseDto:
+    success: bool
+    session_id: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AIAgentEndSessionRequestDto:
+    session_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AIAgentEndSessionResponseDto:
+    success: bool
+    message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AIAgentMessageRequestDto:
+    session_id: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class MotorDirectiveDto:
+    arm: str
+    degrees: float
+    direction: str
+
+
+@dataclass(frozen=True, slots=True)
+class AIAgentMessageResponseDto:
+    success: bool
+    response: str = ""
+    directive: MotorDirectiveDto | None = None
+    error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StepperMoveResponseDto:
+    success: bool
+    message: str = ""

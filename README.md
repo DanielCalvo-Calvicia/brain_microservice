@@ -45,6 +45,8 @@ The application layer depends on ports/interfaces. FastAPI, `httpx`, URLs, and H
 | STT | `http://127.0.0.1:8001` | Converts audio streams or audio bytes into text. |
 | TTS | `http://127.0.0.1:8002` | Converts text into audio streams. |
 | Speaker | `http://127.0.0.1:8003` | Plays audio streams. |
+| ai-agent | `http://127.0.0.1:7998` | Decides what to do with transcribed text (`AIAgentPort`/`HttpAIAgentAdapter`, session lifecycle). Called once per `run_voice_pipeline()` invocation; never exercised against a real ai-agent process (verified with fakes/mocks only). |
+| stepper | `http://127.0.0.1:8005` | Moves the arms (`StepperPort`/`HttpStepperAdapter`). Only Brain may call it; never exercised against real hardware. |
 
 ## 3. Architecture
 
@@ -70,7 +72,15 @@ FastApiAdapter
       -> STTPort       -> HttpSTTAdapter
       -> TTSPort       -> HttpTTSAdapter
       -> SpeakerPort   -> HttpSpeakerAdapter
+      -> AIAgentPort   -> HttpAIAgentAdapter   (called from Step9; see below)
+      -> StepperPort   -> HttpStepperAdapter   (called from Step9 on a movement decision; see below)
 ```
+
+Since 2026-09-22, `application/services/steps/stream_internal/step9_stt_to_tts.py` calls `BrainService.ask_ai_agent()` instead of echoing STT text straight to TTS. It accumulates STT `completed` utterances until either the STT stream ends or `max_text_segments` have arrived (0, the default used by the startup pipeline, means unlimited: wait for the stream to end, which may be the whole service lifetime), then asks ai-agent **once** with everything accumulated. Only ai-agent's reply — never the raw STT text — reaches TTS. A session is attempted at Brain's own startup on a best-effort basis (its failure never stops Brain from starting) and is otherwise established lazily, with automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only, so they don't survive its own restarts). If `ask_ai_agent()` itself raises (ai-agent unreachable), Step9 falls back to a fixed apology — a soft failure ai-agent recovers from on its own already arrives as a speakable apology in `response`, so this fallback is a last resort.
+
+When the decision includes a movement directive, `BrainService.move_arm()` is dispatched as an independent, fire-and-forget `asyncio.create_task` — deliberately **not** `context.create_task`/`VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires as soon as this run's TTS/speaker work finishes, which can be faster than a real HTTP round trip to stepper; a move tied to that would get cancelled in the normal, successful case, not just on shutdown. It never blocks or fails the spoken reply. ai-agent's `MotorDirectiveDto` only says `arm: "left"|"right"`, `degrees`, `direction` — it has no idea what stepper's own `stepper_id`s are (that's stepper's own `STEPPER_CONFIGS`), so `HttpStepperAdapter` is the one place that maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full revolutions, and applies a fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). `move_arm()` never raises on a failed or refused move — it returns `StepperMoveResponseDto(success=False, ...)` instead, since the caller already has ai-agent's spoken reply regardless of whether the physical move succeeds.
+
+**This has never been exercised against a real ai-agent process or real stepper hardware** — only `contracts/tests/e2e` (real STT/TTS/speaker processes, fake ai-agent/stepper) and Brain's own mocked test suite. A real multi-turn conversation (one ai-agent call per utterance, not per pipeline invocation) is a bigger, separate change — not done here.
 
 ## 4. HTTP API
 
@@ -233,12 +243,26 @@ TTS_STREAM_ENDPOINT=/process/stream/get
 SPEAKER_BASE_URL=http://127.0.0.1:8003
 SPEAKER_PLAY_STREAM_ENDPOINT=/process/stream/set
 
+# Not called by the live voice pipeline yet (planned).
+AI_AGENT_BASE_URL=http://127.0.0.1:7998
+AI_AGENT_START_SESSION_ENDPOINT=/session/start
+AI_AGENT_MESSAGE_ENDPOINT=/session/message
+AI_AGENT_END_SESSION_ENDPOINT=/session/end
+
+# Not called by the live voice pipeline yet (planned). ai-agent only says "left"/"right"; these
+# map that to the stepper_id stepper itself is configured with (its own STEPPER_CONFIGS).
+STEPPER_BASE_URL=http://127.0.0.1:8005
+STEPPER_ROTATE_ENDPOINT_TEMPLATE=/control/{stepper_id}/rotate
+STEPPER_LEFT_ARM_STEPPER_ID=stepper_1
+STEPPER_RIGHT_ARM_STEPPER_ID=stepper_2
+STEPPER_DEFAULT_RPM=15
+
 STARTUP_PREFLIGHT_ENABLED=true
 STARTUP_PREFLIGHT_TIMEOUT_SECONDS=60
 MICROSERVICE_READY_POLL_INTERVAL_SECONDS=2
 ```
 
-Endpoint values can be paths or full URLs. Full URLs that match the configured service origin are normalized to paths.
+Endpoint values can be paths or full URLs. Full URLs that match the configured service origin are normalized to paths. `STEPPER_ROTATE_ENDPOINT_TEMPLATE` is a path template with a `{stepper_id}` placeholder, not a fixed endpoint, so it is not normalized this way.
 
 ## 8. Runtime Environments And Logs
 

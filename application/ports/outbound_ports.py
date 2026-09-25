@@ -1,6 +1,12 @@
 from typing import Protocol
 
 from application.dtos.outbound_dtos import (
+    AIAgentEndSessionRequestDto,
+    AIAgentEndSessionResponseDto,
+    AIAgentMessageRequestDto,
+    AIAgentMessageResponseDto,
+    AIAgentStartSessionRequestDto,
+    AIAgentStartSessionResponseDto,
     ExternalHealthResponseDto,
     MicrophoneStreamRequestDto,
     MicrophoneStreamResponseDto,
@@ -8,9 +14,11 @@ from application.dtos.outbound_dtos import (
     SpeakerPlaybackResponseDto,
     STTBatchRequestDto,
     STTBatchResponseDto,
+    MotorDirectiveDto,
     STTSetStreamRequestDto,
     STTTextStreamRequestDto,
     STTStreamResponseDto,
+    StepperMoveResponseDto,
     TTSAudioStreamRequestDto,
     TTSAudioStreamResponseDto,
     TTSSetStreamRequestDto,
@@ -58,4 +66,25 @@ class TTSPort(HealthCheckPort, Protocol):
 
 class SpeakerPort(HealthCheckPort, Protocol):
     async def play_stream(self, request: SpeakerPlaybackRequestDto) -> SpeakerPlaybackResponseDto:
+        ...
+
+
+class AIAgentPort(HealthCheckPort, Protocol):
+    """ai-agent only decides; it never controls hardware. Brain acts on what it returns."""
+
+    async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
+        ...
+
+    async def message(self, request: AIAgentMessageRequestDto) -> AIAgentMessageResponseDto:
+        ...
+
+    async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
+        ...
+
+
+class StepperPort(HealthCheckPort, Protocol):
+    """Only Brain may call this. It translates ai-agent's arm/degrees/direction directive into
+    whichever physical stepper_id that arm actually is — ai-agent has no notion of that mapping."""
+
+    async def move(self, directive: MotorDirectiveDto) -> StepperMoveResponseDto:
         ...

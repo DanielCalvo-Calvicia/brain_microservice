@@ -5,9 +5,11 @@ microservice's contract defines it; every output is checked as the contract even
 microservice expects.
 """
 
+import asyncio
 import base64
 
 import pytest
+from application.dtos.outbound_dtos import AIAgentMessageResponseDto, MotorDirectiveDto, StepperMoveResponseDto
 from application.services.steps.context import AsyncStreamPipe
 from application.services.steps.stream_internal.step8_mic_to_stt import (
     Step8MicStreamToInternalStreamToSTTStream,
@@ -152,24 +154,69 @@ def _stt_sse(texts: tuple[str, ...]) -> bytes:
     return b"".join(events)
 
 
+_FIXED_REPLY = "the reply"
+
+
+async def _fixed_ai_agent(text: str) -> AIAgentMessageResponseDto:
+    return AIAgentMessageResponseDto(success=True, response=_FIXED_REPLY)
+
+
+async def _unreachable_move_arm(directive: MotorDirectiveDto) -> StepperMoveResponseDto:
+    raise AssertionError("no directive expected in this test")
+
+
 @pytest.mark.asyncio
-async def test_stt_to_tts_turns_each_transcribed_utterance_into_one_tts_text() -> None:
+async def test_stt_to_tts_asks_ai_agent_once_with_the_whole_utterance_and_speaks_its_reply() -> None:
+    # The raw STT text is never spoken: it is sent to ai-agent once, and its reply - not the
+    # transcript - is what TTS receives as the single completed event's text.
+    received: list[str] = []
+
+    async def ask_ai_agent(text: str) -> AIAgentMessageResponseDto:
+        received.append(text)
+        return AIAgentMessageResponseDto(success=True, response="spoken reply")
+
     bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("hello ", "world")),)), AsyncStreamPipe("tts-in")
+        byte_stream((_stt_sse(("hello ", "world")),)), AsyncStreamPipe("tts-in"),
+        ask_ai_agent=ask_ai_agent, move_arm=_unreachable_move_arm,
     )
 
     await bridge.stt_stream_to_internal_stream()
 
     events = await _collect_until_completed(bridge.internal_stream.stream)
     _assert_sequence(events)
-    assert [event.type for event in events] == [
-        EventType.START_STREAM,
-        EventType.PARTIAL,
-        EventType.PARTIAL,
-        EventType.COMPLETED,
-    ]
-    assert [events[1].payload.text, events[2].payload.text] == ["hello ", "world"]  # not spoken twice
-    assert (events[3].payload.reason, events[3].payload.output) == ("completed", "hello world")
+    assert [event.type for event in events] == [EventType.START_STREAM, EventType.COMPLETED]
+    assert received == ["hello world"]
+    assert (events[1].payload.reason, events[1].payload.output) == ("completed", "spoken reply")
+
+
+@pytest.mark.asyncio
+async def test_a_movement_directive_is_dispatched_to_stepper_without_blocking_the_reply() -> None:
+    moved: list[MotorDirectiveDto] = []
+
+    async def ask_ai_agent(text: str) -> AIAgentMessageResponseDto:
+        return AIAgentMessageResponseDto(
+            success=True, response="moving now",
+            directive=MotorDirectiveDto(arm="left", degrees=90.0, direction="forward"),
+        )
+
+    async def move_arm(directive: MotorDirectiveDto) -> StepperMoveResponseDto:
+        moved.append(directive)
+        return StepperMoveResponseDto(success=True, message="moved")
+
+    bridge = Step9STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("move my arm",)),)), AsyncStreamPipe("tts-in"),
+        ask_ai_agent=ask_ai_agent, move_arm=move_arm,
+    )
+
+    await bridge.stt_stream_to_internal_stream()
+
+    events = await _collect_until_completed(bridge.internal_stream.stream)
+    assert (events[1].payload.reason, events[1].payload.output) == ("completed", "moving now")
+    # The reply above is already available before the fire-and-forget move task is awaited here.
+    # It is deliberately NOT tracked by VoicePipelineContext: a movement must survive this
+    # pipeline run's own cleanup, not be cancelled by it (see _dispatch_move's docstring).
+    await asyncio.gather(*bridge._background_moves)
+    assert moved == [MotorDirectiveDto(arm="left", degrees=90.0, direction="forward")]
 
 
 @pytest.mark.asyncio
@@ -177,7 +224,9 @@ async def test_stt_error_event_fails_the_tts_text_input() -> None:
     wire = b"data: " + stream_event_bytes("stream_started", 1, {}) + b"\n"
     wire += b"data: " + stream_event_bytes("error", 2, {"code": "stream_failed", "message": "whisper died", "recoverable": True}) + b"\n"
     tts_in: AsyncStreamPipe[str] = AsyncStreamPipe("tts-in")
-    bridge = Step9STTStreamToInternalStreamToTTSStream(byte_stream((wire,)), tts_in)
+    bridge = Step9STTStreamToInternalStreamToTTSStream(
+        byte_stream((wire,)), tts_in, ask_ai_agent=_fixed_ai_agent, move_arm=_unreachable_move_arm,
+    )
 
     with pytest.raises(Exception, match="whisper died"):
         await bridge.stt_stream_to_internal_stream()
@@ -317,7 +366,8 @@ async def test_a_fatal_tts_error_fails_the_speaker_input() -> None:
 @pytest.mark.asyncio
 async def test_internal_stream_logs_completed_event_as_structured_record() -> None:
     bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in")
+        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in"),
+        ask_ai_agent=_fixed_ai_agent, move_arm=_unreachable_move_arm,
     )
 
     with capture("brain", level="INFO") as logs:
@@ -326,13 +376,14 @@ async def test_internal_stream_logs_completed_event_as_structured_record() -> No
     (record,) = logs.find("STT-to-TTS internal stream completed event")
     assert record["level"] == "INFO"
     assert record["service"] == "brain"
-    assert record["chars"] == len("hello")
+    assert record["chars"] == len(_FIXED_REPLY)
 
 
 @pytest.mark.asyncio
 async def test_internal_stream_remains_open_after_completed_event_until_pipeline_shutdown() -> None:
     bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in")
+        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in"),
+        ask_ai_agent=_fixed_ai_agent, move_arm=_unreachable_move_arm,
     )
 
     await bridge.stt_stream_to_internal_stream()

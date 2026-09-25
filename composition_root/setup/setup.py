@@ -54,9 +54,14 @@ async def setup() -> None:
         await core_dependency.stt_adapter.close()
         await core_dependency.tts_adapter.close()
         await core_dependency.speaker_adapter.close()
+        await core_dependency.ai_agent_adapter.close()
+        await core_dependency.stepper_adapter.close()
         raise
 
     logger.info("startup preflight passed; opening inbound adapter")
+    # Best-effort: ai-agent is not in the mandatory preflight (nothing in the live pipeline
+    # calls it yet), so its own unavailability never stops Brain from starting.
+    await core_dependency.service.start_ai_agent_session()
     startup_pipeline_task = start_startup_pipeline(core_dependency.service)
     brain_dependency = generate_brain_dependency_from_core(core_dependency)
     container = Container(
@@ -112,9 +117,13 @@ async def _cleanup(container: Container) -> None:
     except Exception as exc:
         logger.error("microphone API stop during cleanup failed", error=str(exc))
 
+    await container.brain_dependency.service.end_ai_agent_session()
+
     logger.info("closing outbound adapters")
     await container.brain_dependency.microphone_adapter.close()
     await container.brain_dependency.stt_adapter.close()
     await container.brain_dependency.tts_adapter.close()
     await container.brain_dependency.speaker_adapter.close()
+    await container.brain_dependency.ai_agent_adapter.close()
+    await container.brain_dependency.stepper_adapter.close()
     logger.info("cleanup completed")
