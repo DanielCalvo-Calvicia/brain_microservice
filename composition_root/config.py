@@ -25,12 +25,10 @@ class AppConfig:
     speaker_base_url: str
     speaker_play_stream_endpoint: str
     ai_agent_base_url: str
-    ai_agent_start_session_endpoint: str
-    ai_agent_message_endpoint: str
-    ai_agent_end_session_endpoint: str
-    ai_agent_motion_start_session_endpoint: str
-    ai_agent_motion_message_endpoint: str
-    ai_agent_motion_end_session_endpoint: str
+    ai_agent_flows: tuple[str, ...]
+    progress_received_message: str
+    progress_thinking_message: str
+    progress_thinking_interval_seconds: float
     stepper_base_url: str
     stepper_rotate_endpoint_template: str
     stepper_left_arm_stepper_id: str
@@ -100,38 +98,14 @@ def load_config() -> AppConfig:
             fallback_env_name="SPEAKER_STREAM_ENDPOINT",
         ),
         ai_agent_base_url=_base_url("AI_AGENT_BASE_URL", "http://127.0.0.1:7998"),
-        # ai-agent hosts two flows, each with its own routes: conversation-flow talks, motion-flow decides movements.
-        ai_agent_start_session_endpoint=_endpoint(
-            "AI_AGENT_START_SESSION_ENDPOINT",
-            "http://127.0.0.1:7998/conversation-flow/session/start",
-            "/conversation-flow/session/start",
-        ),
-        ai_agent_message_endpoint=_endpoint(
-            "AI_AGENT_MESSAGE_ENDPOINT",
-            "http://127.0.0.1:7998/conversation-flow/session/message",
-            "/conversation-flow/session/message",
-        ),
-        ai_agent_end_session_endpoint=_endpoint(
-            "AI_AGENT_END_SESSION_ENDPOINT",
-            "http://127.0.0.1:7998/conversation-flow/session/end",
-            "/conversation-flow/session/end",
-        ),
-        ai_agent_motion_start_session_endpoint=_endpoint(
-            "AI_AGENT_MOTION_START_SESSION_ENDPOINT",
-            "http://127.0.0.1:7998/motion-flow/session/start",
-            "/motion-flow/session/start",
-        ),
-        ai_agent_motion_message_endpoint=_endpoint(
-            "AI_AGENT_MOTION_MESSAGE_ENDPOINT",
-            "http://127.0.0.1:7998/motion-flow/session/message",
-            "/motion-flow/session/message",
-        ),
-        ai_agent_motion_end_session_endpoint=_endpoint(
-            "AI_AGENT_MOTION_END_SESSION_ENDPOINT",
-            "http://127.0.0.1:7998/motion-flow/session/end",
-            "/motion-flow/session/end",
-        ),
-        stepper_base_url=_base_url("STEPPER_BASE_URL", "http://127.0.0.1:8005"),
+        # ai-agent hosts several flows (agents), each with its own routes /<flow>/session/{start,message,end}.
+        # They are asked one after the other, in this order, for every utterance: the first writes the reply,
+        # the last decides the movements.
+        ai_agent_flows=_list_env("AI_AGENT_FLOWS", ("conversation-flow", "motion-flow")),
+        # What Brain says while the flows work: at once when an utterance arrives, then every N seconds.
+        progress_received_message=_text_env("PROGRESS_RECEIVED_MESSAGE", "Message received."),
+        progress_thinking_message=_text_env("PROGRESS_THINKING_MESSAGE", "Thinking."),
+        progress_thinking_interval_seconds=_float_env("PROGRESS_THINKING_INTERVAL_SECONDS", 2.0),        stepper_base_url=_base_url("STEPPER_BASE_URL", "http://127.0.0.1:8005"),
         # A path template, not a fixed endpoint: {stepper_id} is filled in per call, so this does
         # not go through _endpoint()'s full-URL normalization.
         stepper_rotate_endpoint_template=os.getenv("STEPPER_ROTATE_ENDPOINT_TEMPLATE", "/control/{stepper_id}/rotate"),
@@ -159,6 +133,19 @@ def _float_env(name: str, default: float) -> float:
     if value is None or value == "":
         return default
     return float(value)
+
+
+def _list_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _text_env(name: str, default: str) -> str:
+    """The variable's text; set but empty means "say nothing" (unlike the other settings, an empty value is kept)."""
+    value = os.getenv(name)
+    return default if value is None else value
 
 
 def _bool_env(name: str, default: bool) -> bool:

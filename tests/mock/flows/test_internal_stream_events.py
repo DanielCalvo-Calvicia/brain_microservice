@@ -9,7 +9,8 @@ import asyncio
 import base64
 
 import pytest
-from application.dtos.outbound_dtos import AIAgentMessageResponseDto, MotorDirectiveDto
+from application.dtos.outbound_dtos import AgentFlowResultDto, MotorDirectiveDto
+from application.services.progress import ProgressMessages
 from application.services.routes.context import AsyncStreamPipe
 from application.services.routes.stream_internal.mic_to_stt import (
     MicStreamToInternalStreamToSTTStream,
@@ -175,7 +176,7 @@ async def test_stt_to_tts_asks_ai_agent_once_per_utterance_and_speaks_each_reply
     class _EchoingAIAgent(DiagnosticAIAgent):
         async def message(self, request):
             self.message_requests.append(request)
-            return AIAgentMessageResponseDto(success=True, response=f"reply to {request.message!r}")
+            return AgentFlowResultDto(flow=self.name, success=True, spoken=f"reply to {request.message!r}")
 
     ai_agent = _EchoingAIAgent()
     brain_service = build_brain_service(ai_agent=ai_agent, stepper=_UnreachableStepper())
@@ -220,20 +221,19 @@ async def test_a_movement_sequence_is_dispatched_to_stepper_in_order_without_blo
 
 
 @pytest.mark.asyncio
-async def test_a_question_from_motion_flow_is_spoken_and_nothing_moves() -> None:
+async def test_a_question_from_motion_flow_is_spoken_after_the_reply_and_nothing_moves() -> None:
     motion_agent = DiagnosticMotionAgent(response="How many degrees?", awaiting_user_input=True)
     brain_service = build_brain_service(
-        ai_agent=DiagnosticAIAgent(response="never used"), stepper=_UnreachableStepper(), motion_agent=motion_agent)
+        ai_agent=DiagnosticAIAgent(response="Sure."), stepper=_UnreachableStepper(), motion_agent=motion_agent)
     bridge = STTStreamToInternalStreamToTTSStream(
         byte_stream((_stt_sse(("move my arm",)),)), AsyncStreamPipe("tts-in"), brain_service
     )
 
     await bridge.stt_stream_to_internal_stream()
 
-    events = await _collect_until_completed(bridge.internal_stream.stream)
-    assert events[1].payload.output == "How many degrees?"
+    events = [e async for e in bridge.internal_stream.stream]       # the whole stream, not only up to the first reply
+    assert [e.payload.output for e in events[1:]] == ["Sure.", "How many degrees?"]
     assert not bridge._background_moves
-
 
 @pytest.mark.asyncio
 async def test_a_conversation_flow_failure_speaks_the_apology_and_still_moves() -> None:
@@ -252,7 +252,7 @@ async def test_a_conversation_flow_failure_speaks_the_apology_and_still_moves() 
     await bridge.stt_stream_to_internal_stream()
 
     events = await _collect_until_completed(bridge.internal_stream.stream)
-    assert "could not reach my decision-making service" in events[1].payload.output
+    assert "could not reach my decision-making service" in events[1].payload.output       # nobody else had anything to say
     await asyncio.gather(*bridge._background_moves)
     assert stepper.move_requests == [directive]
 

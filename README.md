@@ -45,7 +45,7 @@ The application layer depends on ports/interfaces. FastAPI, `httpx`, URLs, and H
 | STT | `http://127.0.0.1:8001` | Converts audio streams or audio bytes into text. |
 | TTS | `http://127.0.0.1:8002` | Converts text into audio streams. |
 | Speaker | `http://127.0.0.1:8003` | Plays audio streams. |
-| ai-agent | `http://127.0.0.1:7998` | Decides what to do with transcribed text. Two flows, each with its own routes and session: conversation-flow (`AIAgentPort`/`HttpAIAgentAdapter`: the reply) and motion-flow (`MotionAgentPort`/`HttpMotionAgentAdapter`: the arm movements). Called once per utterance; never exercised against a real ai-agent process (verified with fakes/mocks only). |
+| ai-agent | `http://127.0.0.1:7998` | Decides what to do with transcribed text. Several flows, each with its own routes `/<flow>/session/...` and its own session, asked one after the other in the order of `AI_AGENT_FLOWS` (default conversation-flow, then motion-flow): conversation-flow writes the reply, motion-flow decides the arm movements (`AgentFlowPort` with one adapter per flow). Called once per utterance; never exercised against a real ai-agent process (verified with fakes/mocks only). |
 | stepper | `http://127.0.0.1:8005` | Moves the arms (`StepperPort`/`HttpStepperAdapter`). Only Brain may call it; never exercised against real hardware. |
 
 ## 3. Architecture
@@ -72,12 +72,13 @@ FastApiAdapter
       -> STTPort       -> HttpSTTAdapter
       -> TTSPort       -> HttpTTSAdapter
       -> SpeakerPort   -> HttpSpeakerAdapter
-      -> AIAgentPort   -> HttpAIAgentAdapter   (ai-agent's conversation-flow: the reply; called from the STT-to-TTS route via `decide()`)
-      -> MotionAgentPort -> HttpMotionAgentAdapter (ai-agent's motion-flow: which arm movements; same service, its own routes)
+      -> AgentFlowPort -> HttpConversationFlowAdapter, HttpMotionFlowAdapter, ...   (ai-agent's flows, one after the other, via `decide()`)
       -> StepperPort   -> HttpStepperAdapter   (called from the STT-to-TTS route on a movement decision; see below)
 ```
 
-Since 2026-09-22, `application/services/routes/stream_internal/stt_to_tts.py` calls `BrainService.ask_ai_agent()` instead of echoing STT text straight to TTS. Since 2026-09-29 it decides **once per STT `completed` event** (STT's own silence detection marks each utterance boundary), not once per pipeline run: for each utterance `BrainService.decide()` asks ai-agent's motion-flow first (which movements, or which detail is missing) and then its conversation-flow (the reply, told what the robot does through `robot_context`), and speaks that one reply, then keeps listening for the next utterance — repeating for as long as the STT stream stays open (the whole service lifetime for the startup pipeline, since the microphone is never stopped except at shutdown). `max_text_segments` (0 = unlimited) only caps how many of those decisions get made, for bounded/test runs; production leaves it at 0. Only ai-agent's reply — never the raw STT text — reaches TTS. When motion-flow is asking the user for a missing detail (`awaiting_user_input`) its question is spoken as it is and conversation-flow is not asked; the user's answer is the next utterance, which goes to motion-flow first like every other one. A motion-flow failure never stops the conversation (nothing moves for that utterance); a conversation-flow failure never cancels an accepted movement (the apology is spoken and the arm still moves). A session is attempted at Brain's own startup on a best-effort basis (its failure never stops Brain from starting) and is otherwise established lazily, with automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only, so they don't survive its own restarts). If `ask_ai_agent()` itself raises (ai-agent unreachable), the route falls back to a fixed apology — a soft failure ai-agent recovers from on its own already arrives as a speakable apology in `response`, so this fallback is a last resort.
+Since 2026-09-22, `application/services/routes/stream_internal/stt_to_tts.py` calls ai-agent instead of echoing STT text straight to TTS. Since 2026-09-29 it decides **once per STT `completed` event** (STT's own silence detection marks each utterance boundary), not once per pipeline run, and keeps listening for the next utterance for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). `max_text_segments` (0 = unlimited) only caps how many of those decisions get made, for bounded/test runs; production leaves it at 0. Only ai-agent's words — never the raw STT text — reach TTS.
+
+**What the user hears while ai-agent works** (`application/services/progress.py`): as soon as an utterance arrives Brain says `message received` (`PROGRESS_RECEIVED_MESSAGE`); while ai-agent's flows run Brain says `thinking` (`PROGRESS_THINKING_MESSAGE`) every 2 seconds (`PROGRESS_THINKING_INTERVAL_SECONDS`; the first one after one interval, so a quick answer stays quiet); only when **all** the flows have ended does it say the answer and send the movements to the stepper. The flows are asked **one after the other, in order, each only when the one before has ended** (`BrainService.decide()`): conversation-flow writes the reply and motion-flow, last, decides the movements. What each flow says is spoken in order (for example the reply, then motion-flow's refusal or question). A flow that asks the user a question (`awaiting_user_input`) stops the chain, and the next utterance, which is the answer, goes only to that flow. A flow that cannot be reached is skipped (an accepted movement is never cancelled because another flow was down); if none can be reached Brain speaks a fixed apology. Each flow keeps its own session, opened at startup on a best-effort basis (its failure never stops Brain from starting) or lazily, with one automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only).
 
 When the decision includes movements (a sequence, in order; `degrees` is signed, so left 90 then left -90 returns the arm), `BrainService.move_arms()` is dispatched as an independent, fire-and-forget `asyncio.create_task` — deliberately **not** `context.create_task`/`VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires as soon as this run's TTS/speaker work finishes, which can be faster than a real HTTP round trip to stepper; a move tied to that would get cancelled in the normal, successful case, not just on shutdown. It never blocks or fails the spoken reply. ai-agent's `MotorDirectiveDto` only says `arm: "left"|"right"`, `degrees`, `direction` — it has no idea what stepper's own `stepper_id`s are (that's stepper's own `STEPPER_CONFIGS`), so `HttpStepperAdapter` is the one place that maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full revolutions (stepper only reads the size of `rotations`, so a negative number of degrees is sent as the same rotation in the opposite direction), and applies a fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). `move_arm()` never raises on a failed or refused move — it returns `StepperMoveResponseDto(success=False, ...)` instead, since the caller already has ai-agent's spoken reply regardless of whether the physical move succeeds. `move_arms()` runs a sequence one movement after the other and stops at the first one that fails: going on would leave the arm somewhere the sequence did not intend.
 
@@ -244,14 +245,13 @@ TTS_STREAM_ENDPOINT=/process/stream/get
 SPEAKER_BASE_URL=http://127.0.0.1:8003
 SPEAKER_PLAY_STREAM_ENDPOINT=/process/stream/set
 
-# ai-agent hosts two flows with their own routes: conversation-flow (the reply) and motion-flow (the movements).
+# ai-agent hosts several flows with their own routes /<flow>/session/...; Brain asks them one after the other, in this order.
 AI_AGENT_BASE_URL=http://127.0.0.1:7998
-AI_AGENT_START_SESSION_ENDPOINT=/conversation-flow/session/start
-AI_AGENT_MESSAGE_ENDPOINT=/conversation-flow/session/message
-AI_AGENT_END_SESSION_ENDPOINT=/conversation-flow/session/end
-AI_AGENT_MOTION_START_SESSION_ENDPOINT=/motion-flow/session/start
-AI_AGENT_MOTION_MESSAGE_ENDPOINT=/motion-flow/session/message
-AI_AGENT_MOTION_END_SESSION_ENDPOINT=/motion-flow/session/end
+AI_AGENT_FLOWS=conversation-flow,motion-flow
+# What Brain says while they work (an empty text says nothing; an interval of 0 turns the thinking messages off).
+PROGRESS_RECEIVED_MESSAGE=Message received.
+PROGRESS_THINKING_MESSAGE=Thinking.
+PROGRESS_THINKING_INTERVAL_SECONDS=2
 
 # Not called by the live voice pipeline yet (planned). ai-agent only says "left"/"right"; these
 # map that to the stepper_id stepper itself is configured with (its own STEPPER_CONFIGS).

@@ -3,8 +3,8 @@ from typing import Protocol
 from application.dtos.outbound_dtos import (
     AIAgentEndSessionRequestDto,
     AIAgentEndSessionResponseDto,
-    AIAgentMessageRequestDto,
-    AIAgentMessageResponseDto,
+    AgentFlowRequestDto,
+    AgentFlowResultDto,
     AIAgentStartSessionRequestDto,
     AIAgentStartSessionResponseDto,
     ExternalHealthResponseDto,
@@ -14,8 +14,6 @@ from application.dtos.outbound_dtos import (
     SpeakerPlaybackResponseDto,
     STTBatchRequestDto,
     STTBatchResponseDto,
-    MotionMessageRequestDto,
-    MotionMessageResponseDto,
     MotorDirectiveDto,
     STTSetStreamRequestDto,
     STTTextStreamRequestDto,
@@ -71,27 +69,19 @@ class SpeakerPort(HealthCheckPort, Protocol):
         ...
 
 
-class AIAgentPort(HealthCheckPort, Protocol):
-    """ai-agent only decides; it never controls hardware. Brain acts on what it returns."""
+class AgentFlowPort(Protocol):
+    """One flow of ai-agent (conversation-flow, motion-flow, ...). ai-agent only decides; it never controls
+    hardware, and Brain acts on what the flows return. Every flow has its own session and answers in the
+    same shape, so Brain can run any number of them in order."""
+
+    @property
+    def name(self) -> str:
+        ...
 
     async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
         ...
 
-    async def message(self, request: AIAgentMessageRequestDto) -> AIAgentMessageResponseDto:
-        ...
-
-    async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
-        ...
-
-
-class MotionAgentPort(Protocol):
-    """motion-flow of ai-agent: turns what the user said into an ordered list of arm movements. It only
-    decides; Brain runs the movements. Same service as AIAgentPort, so its health is ai-agent's."""
-
-    async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
-        ...
-
-    async def message(self, request: MotionMessageRequestDto) -> MotionMessageResponseDto:
+    async def message(self, request: AgentFlowRequestDto) -> AgentFlowResultDto:
         ...
 
     async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:

@@ -1,114 +1,163 @@
 """
-BrainService.decide: what Brain does for one utterance. motion-flow goes first (which movements, or a
-question about a missing detail), then conversation-flow words the reply knowing what the robot does.
-Neither agent moves anything: Brain runs the movements, in order.
+BrainService.decide: what Brain does for one utterance. ai-agent's flows are asked one after the other, in order,
+each one only when the one before has ended: conversation-flow writes the reply, motion-flow, last, decides the
+movements. A flow that waits for the user stops the chain and gets the next utterance. Neither agent moves
+anything: Brain runs the movements, in order.
 """
 import pytest
 
-from application.dtos.outbound_dtos import MotionMessageResponseDto, MotorDirectiveDto, RobotContextDto
-from tests.shared.fakes import DiagnosticAIAgent, DiagnosticMotionAgent, DiagnosticStepper, build_brain_service
+from application.dtos.outbound_dtos import AgentFlowResultDto, MotorDirectiveDto
+from tests.shared.fakes import DiagnosticAIAgent, DiagnosticFlow, DiagnosticMotionAgent, DiagnosticStepper, build_brain_service
 
 LEFT_90 = MotorDirectiveDto(arm="left", degrees=90.0, direction="forward")
 LEFT_BACK = MotorDirectiveDto(arm="left", degrees=-90.0, direction="forward")
 
 
-class TestDecide:
+class TestTheChain:
     @pytest.mark.asyncio
-    async def test_a_movement_is_decided_by_motion_flow_and_told_to_conversation_flow(self) -> None:
-        motion = DiagnosticMotionAgent(directives=(LEFT_90, LEFT_BACK))
-        ai_agent = DiagnosticAIAgent(response="Raising my left arm and bringing it back.")
-        service = build_brain_service(ai_agent=ai_agent, motion_agent=motion)
+    async def test_conversation_flow_goes_first_and_motion_flow_only_when_it_has_ended(self) -> None:
+        order: list[str] = []
 
-        decision = await service.decide("raise your left arm and lower it")
+        class _Recording(DiagnosticFlow):
+            async def message(self, request):
+                order.append(f"{self.name}:start")
+                result = await super().message(request)
+                order.append(f"{self.name}:end")
+                return result
 
-        assert decision.reply == "Raising my left arm and bringing it back."
-        assert decision.directives == (LEFT_90, LEFT_BACK)                                 # in order
-        assert motion.message_requests[0].message == "raise your left arm and lower it"
-        assert ai_agent.last_message.robot_context == RobotContextDto(directives=(LEFT_90, LEFT_BACK))
+        conversation = _Recording("conversation-flow", spoken="Sure.", delay=0.05)
+        motion = _Recording("motion-flow", directives=(LEFT_90,))
+        service = build_brain_service(flows=(conversation, motion))
 
-    @pytest.mark.asyncio
-    async def test_an_utterance_that_is_no_movement_reaches_conversation_flow_without_a_context(self) -> None:
-        motion = DiagnosticMotionAgent()                        # nothing to move, nothing to say
-        ai_agent = DiagnosticAIAgent(response="It is sunny.")
-        service = build_brain_service(ai_agent=ai_agent, motion_agent=motion)
+        await service.decide("raise your left arm")
 
-        decision = await service.decide("what is the weather")
-
-        assert decision.reply == "It is sunny." and decision.directives == ()
-        assert ai_agent.last_message.robot_context is None
+        assert order == ["conversation-flow:start", "conversation-flow:end", "motion-flow:start", "motion-flow:end"]
 
     @pytest.mark.asyncio
-    async def test_a_refused_movement_is_told_to_conversation_flow_as_a_reason_and_nothing_moves(self) -> None:
+    async def test_what_each_flow_says_is_kept_in_order_and_the_movements_are_collected(self) -> None:
+        motion = DiagnosticMotionAgent(directives=(LEFT_90, LEFT_BACK), response="")
+        service = build_brain_service(ai_agent=DiagnosticAIAgent(response="Raising my left arm."), motion_agent=motion)
+
+        decision = await service.decide("raise your left arm there and back")
+
+        assert decision.spoken == ("Raising my left arm.",)          # motion-flow had nothing to say
+        assert decision.directives == (LEFT_90, LEFT_BACK)           # in order, signed degrees intact
+        assert decision.failed_flows == ()
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_of_motion_flow_is_spoken_after_the_reply_and_nothing_moves(self) -> None:
         motion = DiagnosticMotionAgent(response="I cannot turn an arm more than 360 degrees in one movement.")
-        ai_agent = DiagnosticAIAgent(response="Sorry, that is too far for my arm.")
-        service = build_brain_service(ai_agent=ai_agent, motion_agent=motion)
+        service = build_brain_service(ai_agent=DiagnosticAIAgent(response="Sure."), motion_agent=motion)
 
         decision = await service.decide("spin your arm ten times")
 
+        assert decision.spoken == ("Sure.", "I cannot turn an arm more than 360 degrees in one movement.")
         assert decision.directives == ()
-        assert decision.reply == "Sorry, that is too far for my arm."
-        assert ai_agent.last_message.robot_context == RobotContextDto(
-            rejected_reason="I cannot turn an arm more than 360 degrees in one movement.")
 
     @pytest.mark.asyncio
-    async def test_a_question_from_motion_flow_is_spoken_as_it_is_and_conversation_flow_is_not_asked(self) -> None:
+    async def test_every_utterance_goes_to_every_flow_and_each_keeps_one_session(self) -> None:
+        conversation, motion = DiagnosticAIAgent(), DiagnosticMotionAgent()
+        service = build_brain_service(ai_agent=conversation, motion_agent=motion)
+
+        await service.decide("one")
+        await service.decide("two")
+
+        for flow in (conversation, motion):
+            assert [r.message for r in flow.message_requests] == ["one", "two"]
+            assert len(flow.start_requests) == 1
+        assert conversation.last_message.session_id != motion.last_message.session_id
+
+    @pytest.mark.asyncio
+    async def test_the_flows_are_whatever_is_configured_in_any_number_and_order(self) -> None:
+        first, second, third = (DiagnosticFlow(name, spoken=name) for name in ("a-flow", "b-flow", "c-flow"))
+        service = build_brain_service(flows=(third, first, second))
+
+        decision = await service.decide("hi")
+
+        assert decision.spoken == ("c-flow", "a-flow", "b-flow")
+
+    @pytest.mark.asyncio
+    async def test_without_any_flow_there_is_nothing_to_say(self) -> None:
+        decision = await build_brain_service(flows=()).decide("hi")
+        assert decision.spoken == () and decision.directives == () and decision.failed_flows == ()
+
+
+class TestAFlowThatWaitsForTheUser:
+    @pytest.mark.asyncio
+    async def test_the_question_is_kept_and_the_flows_after_it_are_not_asked(self) -> None:
+        conversation = DiagnosticAIAgent(response="Which city?", awaiting_user_input=True)
+        motion = DiagnosticMotionAgent(directives=(LEFT_90,))
+        service = build_brain_service(ai_agent=conversation, motion_agent=motion)
+
+        decision = await service.decide("what is the weather in")
+
+        assert decision.spoken == ("Which city?",) and decision.directives == ()
+        assert motion.message_requests == []                      # motion-flow waits for conversation-flow to end
+
+    @pytest.mark.asyncio
+    async def test_a_question_from_the_last_flow_follows_the_reply(self) -> None:
         motion = DiagnosticMotionAgent(response="How many degrees?", awaiting_user_input=True)
-        ai_agent = DiagnosticAIAgent()
-        service = build_brain_service(ai_agent=ai_agent, motion_agent=motion)
+        service = build_brain_service(ai_agent=DiagnosticAIAgent(response="Sure."), motion_agent=motion)
 
         decision = await service.decide("move my arm")
 
-        assert decision.reply == "How many degrees?" and decision.directives == ()
-        assert ai_agent.message_requests == []                  # the user's answer goes to motion-flow next
+        assert decision.spoken == ("Sure.", "How many degrees?") and decision.directives == ()
 
     @pytest.mark.asyncio
-    async def test_every_utterance_goes_to_motion_flow_first_so_an_answer_reaches_the_paused_run(self) -> None:
-        motion = DiagnosticMotionAgent()
-        service = build_brain_service(ai_agent=DiagnosticAIAgent(), motion_agent=motion)
+    async def test_the_answer_goes_only_to_the_flow_that_asked(self) -> None:
+        answers = iter([
+            AgentFlowResultDto(flow="motion-flow", success=True, spoken="How many degrees?", awaiting_user_input=True),
+            AgentFlowResultDto(flow="motion-flow", success=True, directives=(LEFT_90,)),
+            AgentFlowResultDto(flow="motion-flow", success=True),
+        ])
+
+        class _Motion(DiagnosticMotionAgent):
+            async def message(self, request):
+                self.message_requests.append(request)
+                return next(answers)
+
+        conversation, motion = DiagnosticAIAgent(response="Sure."), _Motion()
+        service = build_brain_service(ai_agent=conversation, motion_agent=motion)
+
+        await service.decide("move my arm")                     # both flows were asked; motion-flow asked a question
+        answered = await service.decide("ninety degrees")       # only motion-flow gets the answer
+        later = await service.decide("hello")                   # and the chain is back to normal after it
+
+        assert [r.message for r in motion.message_requests] == ["move my arm", "ninety degrees", "hello"]
+        assert [r.message for r in conversation.message_requests] == ["move my arm", "hello"]
+        assert answered.directives == (LEFT_90,) and answered.spoken == ()
+        assert later.spoken == ("Sure.",)
+
+    @pytest.mark.asyncio
+    async def test_a_flow_that_asks_again_keeps_the_next_utterance(self) -> None:
+        motion = DiagnosticMotionAgent(response="Which arm?", awaiting_user_input=True)
+        conversation = DiagnosticAIAgent(response="Sure.")
+        service = build_brain_service(ai_agent=conversation, motion_agent=motion)
 
         await service.decide("move my arm")
-        await service.decide("thirty degrees")
+        await service.decide("hmm")                             # not an answer: motion-flow asks again
+        await service.decide("the left one")
 
-        assert [r.message for r in motion.message_requests] == ["move my arm", "thirty degrees"]
-        assert len(motion.start_requests) == 1                  # one session for both
-
-    @pytest.mark.asyncio
-    async def test_without_a_motion_agent_brain_only_talks(self) -> None:
-        ai_agent = DiagnosticAIAgent(response="hello")
-        service = build_brain_service(ai_agent=ai_agent)
-
-        decision = await service.decide("raise your arm")
-
-        assert decision.reply == "hello" and decision.directives == ()
-        assert ai_agent.last_message.robot_context is None
+        assert len(conversation.message_requests) == 1          # conversation-flow only heard the first one
+        assert len(motion.message_requests) == 3
 
 
 class TestFailures:
     @pytest.mark.asyncio
-    async def test_a_motion_flow_that_raises_never_stops_the_conversation(self) -> None:
+    async def test_a_flow_that_raises_never_stops_the_others(self) -> None:
         class _Down(DiagnosticMotionAgent):
             async def message(self, request):
                 raise RuntimeError("motion-flow is down")
 
-        ai_agent = DiagnosticAIAgent(response="I am here.")
-        service = build_brain_service(ai_agent=ai_agent, motion_agent=_Down())
+        service = build_brain_service(ai_agent=DiagnosticAIAgent(response="I am here."), motion_agent=_Down())
 
         decision = await service.decide("raise your arm")
 
-        assert decision.reply == "I am here." and decision.directives == ()
-        assert ai_agent.last_message.robot_context is None
+        assert decision.spoken == ("I am here.",) and decision.directives == ()
+        assert decision.failed_flows == ("motion-flow",)
 
     @pytest.mark.asyncio
-    async def test_a_motion_flow_that_reports_a_failure_moves_nothing(self) -> None:
-        motion = DiagnosticMotionAgent(directives=(LEFT_90,), error_code="INTERNAL_ERROR")
-        service = build_brain_service(ai_agent=DiagnosticAIAgent(response="ok"), motion_agent=motion)
-
-        decision = await service.decide("raise your arm")
-
-        assert decision.directives == ()
-
-    @pytest.mark.asyncio
-    async def test_a_conversation_flow_that_raises_keeps_the_accepted_movement_and_has_no_reply(self) -> None:
+    async def test_an_accepted_movement_is_never_cancelled_because_conversation_flow_was_down(self) -> None:
         class _Down(DiagnosticAIAgent):
             async def message(self, request):
                 raise RuntimeError("ai-agent is down")
@@ -117,70 +166,73 @@ class TestFailures:
 
         decision = await service.decide("raise your left arm")
 
-        assert decision.reply is None                       # the caller speaks its own apology
-        assert decision.directives == (LEFT_90,)
+        assert decision.spoken == () and decision.failed_flows == ("conversation-flow",)
+        assert decision.directives == (LEFT_90,)                # the caller speaks its own apology and still moves
 
     @pytest.mark.asyncio
-    async def test_motion_flow_reconnects_once_on_session_not_found(self) -> None:
+    async def test_the_movements_of_a_flow_that_reports_a_failure_are_ignored_but_its_apology_is_spoken(self) -> None:
+        motion = DiagnosticMotionAgent(response="Sorry, something went wrong.", directives=(LEFT_90,), error_code="INTERNAL")
+        service = build_brain_service(ai_agent=DiagnosticAIAgent(response="ok"), motion_agent=motion)
+
+        decision = await service.decide("raise your arm")
+
+        assert decision.directives == ()
+        assert decision.spoken == ("ok", "Sorry, something went wrong.")
+
+    @pytest.mark.asyncio
+    async def test_a_flow_reconnects_once_when_ai_agent_forgot_its_session(self) -> None:
         class _OnceStale(DiagnosticMotionAgent):
             def __init__(self) -> None:
-                super().__init__(session_id="new-motion")
+                super().__init__(session_id="new-motion", directives=(LEFT_90,))
                 self.calls = 0
 
             async def message(self, request):
                 self.calls += 1
                 if self.calls == 1:
-                    return MotionMessageResponseDto(success=False, response="apology", error_code="SESSION_NOT_FOUND")
+                    return AgentFlowResultDto(flow=self.name, success=False, spoken="apology", error_code="SESSION_NOT_FOUND")
                 return await super().message(request)
 
         motion = _OnceStale()
         service = build_brain_service(ai_agent=DiagnosticAIAgent(), motion_agent=motion)
-        service._motion_session_id = "stale"
+        service.agent_flows[1].session_id = "stale"
 
-        await service.ask_motion_agent("hi")
+        decision = await service.decide("raise your arm")
 
-        assert [r.session_id for r in motion.message_requests] == ["new-motion"]     # the retry used the new session
-        assert service._motion_session_id == "new-motion"
+        assert decision.directives == (LEFT_90,)
+        assert service.agent_flows[1].session_id == "new-motion"
 
 
-class TestMotionSession:
+class TestSessions:
     @pytest.mark.asyncio
-    async def test_start_and_end(self) -> None:
-        motion = DiagnosticMotionAgent(session_id="m1")
-        service = build_brain_service(motion_agent=motion)
+    async def test_start_and_end_open_and_close_one_session_per_flow(self) -> None:
+        conversation, motion = DiagnosticAIAgent(session_id="c1"), DiagnosticMotionAgent(session_id="m1")
+        service = build_brain_service(ai_agent=conversation, motion_agent=motion)
 
-        await service.start_motion_session()
-        assert service._motion_session_id == "m1"
+        await service.start_agent_sessions()
+        assert [flow.session_id for flow in service.agent_flows] == ["c1", "m1"]
 
-        await service.end_motion_session()
-        assert service._motion_session_id is None
-        assert motion.end_requests[0].session_id == "m1"
-
-    @pytest.mark.asyncio
-    async def test_start_and_end_are_noops_without_a_motion_agent(self) -> None:
-        service = build_brain_service()
-        await service.start_motion_session()
-        await service.end_motion_session()
-        assert service._motion_session_id is None
+        await service.end_agent_sessions()
+        assert [flow.session_id for flow in service.agent_flows] == [None, None]
+        assert conversation.end_requests[0].session_id == "c1" and motion.end_requests[0].session_id == "m1"
 
     @pytest.mark.asyncio
-    async def test_a_failing_start_does_not_raise(self) -> None:
-        class _Down(DiagnosticMotionAgent):
+    async def test_a_flow_that_cannot_start_does_not_stop_the_others(self) -> None:
+        class _Down(DiagnosticAIAgent):
             async def start_session(self, request):
                 raise RuntimeError("down")
 
-        service = build_brain_service(motion_agent=_Down())
-        await service.start_motion_session()                 # must not raise
-        assert service._motion_session_id is None
+        service = build_brain_service(ai_agent=_Down(), motion_agent=DiagnosticMotionAgent(session_id="m1"))
+
+        await service.start_agent_sessions()                    # must not raise
+
+        assert [flow.session_id for flow in service.agent_flows] == [None, "m1"]
 
 
 class TestMoveArms:
     @pytest.mark.asyncio
     async def test_the_sequence_runs_in_order(self) -> None:
         stepper = DiagnosticStepper()
-        service = build_brain_service(stepper=stepper)
-
-        results = await service.move_arms((LEFT_90, LEFT_BACK))
+        results = await build_brain_service(stepper=stepper).move_arms((LEFT_90, LEFT_BACK))
 
         assert stepper.move_requests == [LEFT_90, LEFT_BACK]
         assert [r.success for r in results] == [True, True]
@@ -188,12 +240,11 @@ class TestMoveArms:
     @pytest.mark.asyncio
     async def test_it_stops_at_the_first_failed_movement(self) -> None:
         stepper = DiagnosticStepper(success=False, message="blocked")      # every movement is refused
-        service = build_brain_service(stepper=stepper)
 
-        results = await service.move_arms((LEFT_90, LEFT_BACK))
+        results = await build_brain_service(stepper=stepper).move_arms((LEFT_90, LEFT_BACK))
 
         assert len(results) == 1 and results[0].success is False
-        assert stepper.move_requests == [LEFT_90]              # "left -90" is never sent: the arm is not where it should be
+        assert stepper.move_requests == [LEFT_90]            # "left -90" is never sent: the arm is not where it should be
 
     @pytest.mark.asyncio
     async def test_a_stepper_that_raises_stops_the_sequence_without_raising(self) -> None:
@@ -201,9 +252,7 @@ class TestMoveArms:
             async def move(self, directive):
                 raise RuntimeError("stepper is busy")
 
-        service = build_brain_service(stepper=_Raises())
-
-        results = await service.move_arms((LEFT_90, LEFT_BACK))
+        results = await build_brain_service(stepper=_Raises()).move_arms((LEFT_90, LEFT_BACK))
 
         assert len(results) == 1 and "stepper is busy" in results[0].message
 

@@ -1,10 +1,7 @@
 import pytest
 
 from application.dtos.outbound_dtos import (
-    AIAgentMessageResponseDto,
-    AIAgentStartSessionResponseDto,
     MotorDirectiveDto,
-    RobotContextDto,
     STTBatchRequestDto,
 )
 from application.dtos.service_dtos import (
@@ -88,127 +85,10 @@ async def test_voice_pipeline_connects_mic_to_stt_to_tts_to_speaker() -> None:
     assert microphone.stopped is False
     assert stt.last_stream_request is not None
     assert tts.set_requests == []
-    # STT's raw text is never spoken directly: each utterance is sent to ai-agent, and its reply (the
+    # STT's raw text is never spoken directly: each utterance is sent to ai-agent's flows, and the reply (the
     # DiagnosticAIAgent default) is what TTS actually receives - once per utterance.
     assert tts.text_received == ["diagnostic reply", "diagnostic reply"]
     assert speaker.audio_received == b"wav"
-
-
-@pytest.mark.asyncio
-async def test_start_ai_agent_session_stores_the_returned_session_id() -> None:
-    ai_agent = DiagnosticAIAgent(session_id="s1")
-    service = build_brain_service(ai_agent=ai_agent)
-
-    await service.start_ai_agent_session()
-
-    assert service._ai_agent_session_id == "s1"
-    assert ai_agent.start_requests
-
-
-@pytest.mark.asyncio
-async def test_start_ai_agent_session_failure_does_not_raise() -> None:
-    class _FailingAIAgent(DiagnosticAIAgent):
-        async def start_session(self, request):
-            raise RuntimeError("ai-agent is down")
-
-    service = build_brain_service(ai_agent=_FailingAIAgent())
-
-    await service.start_ai_agent_session()  # must not raise
-
-    assert service._ai_agent_session_id is None
-
-
-@pytest.mark.asyncio
-async def test_ask_ai_agent_starts_a_session_lazily() -> None:
-    ai_agent = DiagnosticAIAgent(session_id="s1", response="hello!")
-    service = build_brain_service(ai_agent=ai_agent)
-
-    response = await service.ask_ai_agent("hi")
-
-    assert response.response == "hello!"
-    assert service._ai_agent_session_id == "s1"
-    assert ai_agent.last_message.session_id == "s1"
-
-
-@pytest.mark.asyncio
-async def test_ask_ai_agent_passes_the_robot_context_on() -> None:
-    context = RobotContextDto(directives=(MotorDirectiveDto(arm="left", degrees=90.0, direction="forward"),))
-    ai_agent = DiagnosticAIAgent()
-    service = build_brain_service(ai_agent=ai_agent)
-
-    await service.ask_ai_agent("move your left arm", context)
-
-    assert ai_agent.last_message.robot_context == context
-
-
-@pytest.mark.asyncio
-async def test_ask_ai_agent_reconnects_once_on_session_not_found() -> None:
-    class _OnceStaleAIAgent(DiagnosticAIAgent):
-        def __init__(self) -> None:
-            super().__init__(session_id="new-session", response="back again")
-            self._first_call = True
-
-        async def message(self, request):
-            if self._first_call:
-                self._first_call = False
-                self.message_requests.append(request)
-                return AIAgentMessageResponseDto(success=False, response="apology", error_code="SESSION_NOT_FOUND")
-            return await super().message(request)
-
-    ai_agent = _OnceStaleAIAgent()
-    service = build_brain_service(ai_agent=ai_agent)
-    service._ai_agent_session_id = "stale-session"
-
-    response = await service.ask_ai_agent("hi again")
-
-    assert response.success is True
-    assert response.response == "back again"
-    assert service._ai_agent_session_id == "new-session"
-    assert len(ai_agent.start_requests) == 1
-    assert [r.session_id for r in ai_agent.message_requests] == ["stale-session", "new-session"]
-
-
-@pytest.mark.asyncio
-async def test_ask_ai_agent_gives_up_if_reconnecting_also_fails() -> None:
-    class _NeverAvailableAIAgent(DiagnosticAIAgent):
-        async def start_session(self, request):
-            return AIAgentStartSessionResponseDto(success=False, session_id="", message="down")
-
-        async def message(self, request):
-            self.message_requests.append(request)
-            return AIAgentMessageResponseDto(success=False, response="apology", error_code="SESSION_NOT_FOUND")
-
-    ai_agent = _NeverAvailableAIAgent()
-    service = build_brain_service(ai_agent=ai_agent)
-    service._ai_agent_session_id = "stale-session"
-
-    response = await service.ask_ai_agent("hi")
-
-    assert response.error_code == "SESSION_NOT_FOUND"
-    assert service._ai_agent_session_id is None
-    assert len(ai_agent.message_requests) == 1  # never retried: no session to retry with
-
-
-@pytest.mark.asyncio
-async def test_end_ai_agent_session_clears_the_stored_id() -> None:
-    ai_agent = DiagnosticAIAgent()
-    service = build_brain_service(ai_agent=ai_agent)
-    service._ai_agent_session_id = "s1"
-
-    await service.end_ai_agent_session()
-
-    assert service._ai_agent_session_id is None
-    assert ai_agent.end_requests and ai_agent.end_requests[0].session_id == "s1"
-
-
-@pytest.mark.asyncio
-async def test_end_ai_agent_session_is_a_noop_without_a_session() -> None:
-    ai_agent = DiagnosticAIAgent()
-    service = build_brain_service(ai_agent=ai_agent)
-
-    await service.end_ai_agent_session()
-
-    assert ai_agent.end_requests == []
 
 
 @pytest.mark.asyncio

@@ -6,12 +6,13 @@ from domain.models import ServiceStatus
 
 @dataclass(frozen=True, slots=True)
 class AgentDecisionDto:
-    """What Brain does for one utterance: what to say (``None`` when conversation-flow could not be reached,
-    so the caller speaks its own apology) and the movements to run in order (possibly none)."""
+    """What Brain does for one utterance once ai-agent's flows have all ended: what to say, in order
+    (one part per flow that had something to say), the movements to run, in order (possibly none), and the
+    flows that could not be reached (so the caller can apologise when there is nothing else to say)."""
 
-    reply: str | None
+    spoken: tuple[str, ...] = ()
     directives: tuple[MotorDirectiveDto, ...] = ()
-
+    failed_flows: tuple[str, ...] = ()
 
 @dataclass(frozen=True, slots=True)
 class HealthCheckServiceResponseDto:

@@ -124,46 +124,29 @@ class MotorDirectiveDto:
 
 
 @dataclass(frozen=True, slots=True)
-class RobotContextDto:
-    """What motion-flow decided for a message; conversation-flow words its reply from it.
-    ``directives`` is the accepted sequence, ``rejected_reason`` why a movement cannot be done."""
+class AgentFlowRequestDto:
+    """One message for one flow of ai-agent (conversation-flow, motion-flow, ...)."""
 
-    directives: tuple[MotorDirectiveDto, ...] = ()
-    rejected_reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AIAgentMessageRequestDto:
-    session_id: str
-    message: str
-    robot_context: RobotContextDto | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AIAgentMessageResponseDto:
-    success: bool
-    response: str = ""
-    error_code: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MotionMessageRequestDto:
     session_id: str
     message: str
 
 
 @dataclass(frozen=True, slots=True)
-class MotionMessageResponseDto:
-    """motion-flow's decision: the movements to run in order, or why there are none. ``response`` is a
-    question for the user when ``awaiting_user_input`` (speak it, the answer comes next), a refusal when
-    there are no directives and it is not empty, and empty otherwise."""
+class AgentFlowResultDto:
+    """What one flow of ai-agent decided, in the same shape for every flow.
 
+    ``spoken`` is what to say (always speakable: an apology when ``success`` is false, a question when
+    ``awaiting_user_input``, a refusal for motion-flow). ``directives`` are the movements to run, in order
+    (only motion-flow sets them). ``awaiting_user_input`` says the flow is paused with a question for the user:
+    the next utterance is its answer.
+    """
+
+    flow: str
     success: bool
-    response: str = ""
+    spoken: str = ""
     directives: tuple[MotorDirectiveDto, ...] = ()
     awaiting_user_input: bool = False
     error_code: str | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class StepperMoveResponseDto:

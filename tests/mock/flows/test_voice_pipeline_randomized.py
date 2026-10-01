@@ -23,8 +23,7 @@ from application.dtos.outbound_dtos import (
     TTSTextStreamRequestDto,
 )
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
-from application.services.service import BrainService
-from tests.shared.fakes import DiagnosticAIAgent, DiagnosticStepper
+from tests.shared.fakes import DiagnosticAIAgent, DiagnosticStepper, build_brain_service
 from application.services.routes.stream_internal.external_events import ndjson_events
 from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND, TTS_INBOUND
 from tests.shared.wire import stream_event_bytes
@@ -222,7 +221,7 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
     stt = AuditedSTT(stt_text_chunks, events)
     tts = AuditedTTS(tts_audio_chunks, events)
     speaker = AuditedSpeaker(events)
-    service = BrainService(microphone, stt, tts, speaker, ai_agent, DiagnosticStepper())
+    service = build_brain_service(microphone, stt, tts, speaker, ai_agent, DiagnosticStepper())
 
     response = await service.run_voice_pipeline(
         VoicePipelineServiceRequestDto(

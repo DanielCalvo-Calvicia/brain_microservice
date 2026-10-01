@@ -2,17 +2,15 @@ import asyncio
 import base64
 
 from application.dtos.outbound_dtos import (
+    AgentFlowRequestDto,
+    AgentFlowResultDto,
     AIAgentEndSessionRequestDto,
     AIAgentEndSessionResponseDto,
-    AIAgentMessageRequestDto,
-    AIAgentMessageResponseDto,
     AIAgentStartSessionRequestDto,
     AIAgentStartSessionResponseDto,
     ExternalHealthResponseDto,
     MicrophoneStreamRequestDto,
     MicrophoneStreamResponseDto,
-    MotionMessageRequestDto,
-    MotionMessageResponseDto,
     MotorDirectiveDto,
     SpeakerPlaybackRequestDto,
     SpeakerPlaybackResponseDto,
@@ -27,6 +25,7 @@ from application.dtos.outbound_dtos import (
     TTSSetStreamRequestDto,
     TTSTextStreamRequestDto,
 )
+from application.services.progress import ProgressMessages
 from application.services.service import BrainService
 from application.services.routes.stream_internal.external_events import ndjson_events
 from contracts.stream.codec import EventSequencer, encode_ndjson, encode_sse
@@ -224,28 +223,37 @@ class DiagnosticSpeaker:
         return SpeakerPlaybackResponseDto(success=True, message="played")
 
 
-class DiagnosticAIAgent:
-    """``response=None`` echoes the received message back (useful where a test cares that the
-    text which reaches TTS is unchanged, e.g. audio-format/duration checks)."""
+class DiagnosticFlow:
+    """One flow of ai-agent. ``spoken`` is what it says (None echoes the received message back, useful where a
+    test cares that the text which reaches TTS is unchanged); ``directives`` the movements it decides;
+    ``awaiting_user_input`` makes ``spoken`` a question; ``delay`` makes it slow (seconds), to watch progress."""
 
     def __init__(
         self,
+        name: str,
         *,
-        available: bool = True,
         session_id: str = "diagnostic-session",
-        response: str | None = "diagnostic reply",
+        spoken: str | None = "",
+        directives: tuple[MotorDirectiveDto, ...] = (),
+        awaiting_user_input: bool = False,
         error_code: str | None = None,
+        delay: float = 0.0,
+        available: bool = True,
     ) -> None:
+        self.name = name
         self.available = available
         self.session_id = session_id
-        self.response = response
+        self.spoken = spoken
+        self.directives = directives
+        self.awaiting_user_input = awaiting_user_input
         self.error_code = error_code
+        self.delay = delay
         self.start_requests: list[AIAgentStartSessionRequestDto] = []
-        self.message_requests: list[AIAgentMessageRequestDto] = []
+        self.message_requests: list[AgentFlowRequestDto] = []
         self.end_requests: list[AIAgentEndSessionRequestDto] = []
 
     @property
-    def last_message(self) -> AIAgentMessageRequestDto | None:
+    def last_message(self) -> AgentFlowRequestDto | None:
         return self.message_requests[-1] if self.message_requests else None
 
     async def check_health(self) -> ExternalHealthResponseDto:
@@ -255,50 +263,14 @@ class DiagnosticAIAgent:
         self.start_requests.append(request)
         return AIAgentStartSessionResponseDto(success=True, session_id=self.session_id, message="Session started successfully.")
 
-    async def message(self, request: AIAgentMessageRequestDto) -> AIAgentMessageResponseDto:
+    async def message(self, request: AgentFlowRequestDto) -> AgentFlowResultDto:
         self.message_requests.append(request)
-        return AIAgentMessageResponseDto(
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        return AgentFlowResultDto(
+            flow=self.name,
             success=self.error_code is None,
-            response=self.response if self.response is not None else request.message,
-            error_code=self.error_code,
-        )
-
-    async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
-        self.end_requests.append(request)
-        return AIAgentEndSessionResponseDto(success=True, message="Session ended successfully.")
-
-
-class DiagnosticMotionAgent:
-    """motion-flow of ai-agent. ``directives`` is what it decides for every message (empty = no movement);
-    ``awaiting_user_input`` makes it answer with a question instead; ``response`` is that question or a refusal."""
-
-    def __init__(
-        self,
-        *,
-        session_id: str = "diagnostic-motion-session",
-        directives: tuple[MotorDirectiveDto, ...] = (),
-        response: str = "",
-        awaiting_user_input: bool = False,
-        error_code: str | None = None,
-    ) -> None:
-        self.session_id = session_id
-        self.directives = directives
-        self.response = response
-        self.awaiting_user_input = awaiting_user_input
-        self.error_code = error_code
-        self.start_requests: list[AIAgentStartSessionRequestDto] = []
-        self.message_requests: list[MotionMessageRequestDto] = []
-        self.end_requests: list[AIAgentEndSessionRequestDto] = []
-
-    async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
-        self.start_requests.append(request)
-        return AIAgentStartSessionResponseDto(success=True, session_id=self.session_id, message="Session started successfully.")
-
-    async def message(self, request: MotionMessageRequestDto) -> MotionMessageResponseDto:
-        self.message_requests.append(request)
-        return MotionMessageResponseDto(
-            success=self.error_code is None,
-            response=self.response,
+            spoken=self.spoken if self.spoken is not None else request.message,
             directives=self.directives,
             awaiting_user_input=self.awaiting_user_input,
             error_code=self.error_code,
@@ -307,6 +279,24 @@ class DiagnosticMotionAgent:
     async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
         self.end_requests.append(request)
         return AIAgentEndSessionResponseDto(success=True, message="Session ended successfully.")
+
+
+class DiagnosticAIAgent(DiagnosticFlow):
+    """conversation-flow: the reply. ``response=None`` echoes the received message back."""
+
+    def __init__(self, *, response: str | None = "diagnostic reply", **kwargs) -> None:
+        super().__init__("conversation-flow", spoken=response, **kwargs)
+
+    @property
+    def response(self) -> str | None:
+        return self.spoken
+
+
+class DiagnosticMotionAgent(DiagnosticFlow):
+    """motion-flow: the movements (empty = none). ``response`` is a refusal, or the question when ``awaiting_user_input``."""
+
+    def __init__(self, *, response: str = "", session_id: str = "diagnostic-motion-session", **kwargs) -> None:
+        super().__init__("motion-flow", spoken=response, session_id=session_id, **kwargs)
 
 class DiagnosticStepper:
     def __init__(self, *, available: bool = True, success: bool = True, message: str = "moved") -> None:
@@ -327,25 +317,33 @@ class DiagnosticStepper:
         return StepperMoveResponseDto(success=self.success, message=self.message)
 
 
+SILENT = ProgressMessages(received="", thinking="", interval_seconds=0)   # tests that count what TTS says stay exact
+
+
 def build_brain_service(
     microphone: DiagnosticMicrophone | None = None,
     stt: DiagnosticSTT | None = None,
     tts: DiagnosticTTS | None = None,
     speaker: DiagnosticSpeaker | None = None,
-    ai_agent: DiagnosticAIAgent | None = None,
+    ai_agent: DiagnosticFlow | None = None,
     stepper: DiagnosticStepper | None = None,
-    motion_agent: DiagnosticMotionAgent | None = None,
+    motion_agent: DiagnosticFlow | None = None,
+    progress: ProgressMessages = SILENT,
+    flows: tuple[DiagnosticFlow, ...] | None = None,
 ) -> BrainService:
+    """Brain with diagnostic fakes. The flows are conversation-flow then (when given) motion-flow, in that order,
+    like the default AI_AGENT_FLOWS; pass ``flows`` to choose any list. No progress messages unless asked."""
+    if flows is None:
+        flows = (ai_agent or DiagnosticAIAgent(),) + ((motion_agent,) if motion_agent is not None else ())
     return BrainService(
         microphone or DiagnosticMicrophone(),
         stt or DiagnosticSTT(),
         tts or DiagnosticTTS(),
         speaker or DiagnosticSpeaker(),
-        ai_agent or DiagnosticAIAgent(),
         stepper or DiagnosticStepper(),
-        motion_agent,
+        flows,
+        progress,
     )
-
 
 async def microphone_event_stream(chunks: tuple[bytes, ...], sample_rate: int = 16000):
     """What the microphone microservice sends on ``GET /stream`` (microphone outbound contract)."""

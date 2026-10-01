@@ -14,6 +14,7 @@ from contracts.stream.schemas import STT_OUTBOUND
 from shared_logging import get_logger
 
 from application.dtos.outbound_dtos import MotorDirectiveDto
+from application.services.progress import run_with_progress
 
 from ..context import AsyncStreamPipe, VoicePipelineContext
 from .external_events import raise_for_stream_error, sse_events
@@ -28,8 +29,11 @@ _AI_AGENT_UNREACHABLE_APOLOGY = "Sorry, I could not reach my decision-making ser
 
 class STTStreamToInternalStreamToTTSStream:
     """STT outbound events -> one decision per utterance -> (internal stream of TTS inbound
-    events) -> TTS text input. The decision is ai-agent's two flows together (BrainService.decide):
-    motion-flow says which movements were asked for, conversation-flow words the reply.
+    events) -> TTS text input. The decision is ai-agent's flows together (BrainService.decide), asked one after
+    the other in the configured order: conversation-flow writes the reply and motion-flow, last, decides the
+    movements. While they run the user is never left in silence: `message received` is said as soon as the
+    utterance arrives, `thinking` every few seconds until every flow has ended (see `progress.py`), and only
+    then the answer is said and the movements are sent to the stepper.
 
     STT itself is what marks utterance boundaries (its own silence detection: ``stt_silence_threshold``/
     ``stt_silence_limit_seconds``), so every STT ``completed`` event is one utterance, decided on the
@@ -47,7 +51,7 @@ class STTStreamToInternalStreamToTTSStream:
     independent, fire-and-forget task that outlives this pipeline run's own cleanup (deliberately not
     tracked by ``VoicePipelineContext``, whose ``cancel_pending_tasks()`` can fire before a real HTTP
     round trip to stepper finishes): a failed or refused movement is never allowed to block or fail the
-    spoken reply, since ai-agent's reply already accounts for it.
+    spoken reply, which is already on its way to TTS.
     """
 
     def __init__(
@@ -83,6 +87,22 @@ class STTStreamToInternalStreamToTTSStream:
         max_segments = self._context.request.max_text_segments if self._context else 0
         try:
             await self.internal_stream.put(events.next(StartStreamEvent))
+
+            async def say(spoken_text: str) -> None:
+                """One spoken utterance for TTS: an acknowledgement, a thinking message or (part of) the answer."""
+                if not spoken_text.strip():
+                    return
+                completed_event = events.next(
+                    TTSCompletedInboundEvent,
+                    TTSCompletedInboundEventDTO(reason="completed", output=spoken_text),
+                )
+                logger.info(
+                    "STT-to-TTS internal stream completed event",
+                    sequence=completed_event.sequence,
+                    chars=len(completed_event.payload.output),
+                )
+                await self.internal_stream.put(completed_event)
+
             async for event in sse_events(self.stt_stream_out, service_name="stt", schema=STT_OUTBOUND):
                 if event.type is EventType.PARTIAL:
                     if event.payload.text.strip():
@@ -100,21 +120,16 @@ class STTStreamToInternalStreamToTTSStream:
                         event=event.sequence,
                         chars=len(text),
                     )
-                    reply_text, directives = await self._decide(text)
+                    # The user is never left in silence: say at once that the message arrived, say "thinking"
+                    # every few seconds while ai-agent's flows run one after the other, and only when all of them
+                    # have ended say the answer and send the movements to the stepper.
+                    progress = self.brain_service.progress
+                    await say(progress.received)
+                    spoken, directives = await run_with_progress(self._decide(text), say, progress)
+                    for part in spoken:
+                        await say(part)
                     if directives:
                         self._dispatch_moves(directives)
-
-                    completed_event = events.next(
-                        TTSCompletedInboundEvent,
-                        TTSCompletedInboundEventDTO(reason="completed", output=reply_text),
-                    )
-                    logger.info(
-                        "STT-to-TTS internal stream completed event",
-                        sequence=completed_event.sequence,
-                        chars=len(completed_event.payload.output),
-                    )
-                    await self.internal_stream.put(completed_event)
-
                     decisions_made += 1
                     if max_segments > 0 and decisions_made >= max_segments:
                         logger.info("text segment limit reached", max_segments=max_segments)
@@ -132,17 +147,19 @@ class STTStreamToInternalStreamToTTSStream:
         finally:
             await self.internal_stream.close()
 
-    async def _decide(self, text: str) -> tuple[str, tuple[MotorDirectiveDto, ...]]:
-        """What to say back, and what to move (nothing, one movement or a sequence). ``text`` is one
-        already-stripped, non-empty utterance: the caller never invokes this for a blank completed event."""
+    async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...]]:
+        """What to say once every flow of ai-agent has ended (in order), and what to move (nothing, one movement
+        or a sequence). ``text`` is one already-stripped, non-empty utterance: the caller never invokes this for
+        a blank completed event."""
         try:
             decision = await self.brain_service.decide(text)
         except Exception as exc:
             logger.error("ai-agent call failed; falling back to a fixed apology", error=str(exc))
-            return _AI_AGENT_UNREACHABLE_APOLOGY, ()
-        reply = decision.reply if decision.reply is not None else _AI_AGENT_UNREACHABLE_APOLOGY
-        return reply, decision.directives
-
+            return (_AI_AGENT_UNREACHABLE_APOLOGY,), ()
+        spoken = decision.spoken
+        if not spoken and decision.failed_flows:
+            spoken = (_AI_AGENT_UNREACHABLE_APOLOGY,)
+        return spoken, decision.directives
     def _dispatch_moves(self, directives: tuple[MotorDirectiveDto, ...]) -> None:
         """Fire-and-forget: move_arms() runs the sequence in order and already swallows and logs its own
         failures, and a movement must never block, fail or be cut off by the spoken reply's own pipeline

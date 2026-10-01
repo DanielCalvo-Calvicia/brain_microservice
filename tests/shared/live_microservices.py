@@ -1,7 +1,6 @@
 from application.services.service import BrainService
 from composition_root.config import load_config
-from infrastructure.outbound.http.ai_agent.ai_agent_adapter import HttpAIAgentAdapter
-from infrastructure.outbound.http.ai_agent.motion_agent_adapter import HttpMotionAgentAdapter
+from infrastructure.outbound.http.ai_agent.flow_adapters import build_flow_adapters
 from infrastructure.outbound.http.base import HttpServiceConfig
 from infrastructure.outbound.http.microphone.microphone_adapter import HttpMicrophoneAdapter
 from infrastructure.outbound.http.speaker.speaker_adapter import HttpSpeakerAdapter
@@ -42,17 +41,8 @@ class LiveMicroservices:
             ),
             play_stream_endpoint=config.speaker_play_stream_endpoint,
         )
-        self.ai_agent_adapter = HttpAIAgentAdapter(
-            HttpServiceConfig("ai_agent", config.ai_agent_base_url, config.provider_timeout_seconds),
-            start_session_endpoint=config.ai_agent_start_session_endpoint,
-            message_endpoint=config.ai_agent_message_endpoint,
-            end_session_endpoint=config.ai_agent_end_session_endpoint,
-        )
-        self.motion_agent_adapter = HttpMotionAgentAdapter(
-            HttpServiceConfig("ai_agent", config.ai_agent_base_url, config.provider_timeout_seconds),
-            start_session_endpoint=config.ai_agent_motion_start_session_endpoint,
-            message_endpoint=config.ai_agent_motion_message_endpoint,
-            end_session_endpoint=config.ai_agent_motion_end_session_endpoint,
+        self.agent_flow_adapters = build_flow_adapters(
+            config.ai_agent_flows, HttpServiceConfig("ai_agent", config.ai_agent_base_url, config.provider_timeout_seconds)
         )
         self.stepper_adapter = HttpStepperAdapter(
             HttpServiceConfig("stepper", config.stepper_base_url, config.provider_timeout_seconds),
@@ -66,9 +56,8 @@ class LiveMicroservices:
             self.stt_adapter,
             self.tts_adapter,
             self.speaker_adapter,
-            self.ai_agent_adapter,
             self.stepper_adapter,
-            self.motion_agent_adapter,
+            self.agent_flow_adapters,
         )
 
     async def close(self) -> None:
@@ -76,6 +65,6 @@ class LiveMicroservices:
         await self.stt_adapter.close()
         await self.tts_adapter.close()
         await self.speaker_adapter.close()
-        await self.ai_agent_adapter.close()
-        await self.motion_agent_adapter.close()
+        for adapter in self.agent_flow_adapters:
+            await adapter.close()
         await self.stepper_adapter.close()
