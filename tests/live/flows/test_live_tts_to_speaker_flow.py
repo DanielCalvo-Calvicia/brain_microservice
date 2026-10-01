@@ -9,7 +9,7 @@ from application.dtos.outbound_dtos import (
     TTSSetStreamRequestDto,
     TTSTextStreamRequestDto,
 )
-from application.services.routes.stream_internal.external_events import text_stream_as_ndjson_events
+from application.services.streams.events import text_stream_as_ndjson_events
 from tests.shared.live_microservices import LiveMicroservices
 
 

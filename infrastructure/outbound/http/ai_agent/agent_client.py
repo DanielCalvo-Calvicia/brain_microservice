@@ -10,7 +10,7 @@ from application.dtos.outbound_dtos import (
 )
 from shared_logging import get_logger
 from domain.errors import ExternalServiceTimeoutError, ExternalServiceUnavailableError
-from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig
+from infrastructure.outbound.http.http_client import HttpServiceClient, HttpServiceConfig
 
 logger = get_logger(__name__)
 

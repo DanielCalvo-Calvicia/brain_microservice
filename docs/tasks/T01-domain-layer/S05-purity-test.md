@@ -1,6 +1,6 @@
 # T01-S05: Domain purity test
 
-Status: TODO
+Status: DONE
 Task: T01 domain-layer | Depends on: T01-S01, T01-S02, T01-S03, T01-S04 | Size: S
 
 > Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`. Change the `Status:` line above (nothing else needs updating: `docs/tasks/status.py` reads it).
@@ -12,8 +12,8 @@ A test that fails if the domain imports anything but the standard library and it
 
 ## Do
 
-- [ ] Create `tests/mock/test_layout.py` (ast-based, like `ai-agent/tests/test_orchestration_layout.py`): every import in `domain/**` is the standard library or starts with `domain`; none of `asyncio`, `logging`, `httpx`, `fastapi`, `contracts`, `shared_logging`, `application`, `infrastructure`, `composition_root`.
-- [ ] Prove it bites: add a temporary `import asyncio` to one domain file, see the test fail, remove it.
+- [x] Create `tests/mock/test_layout.py` (ast-based, like `ai-agent/tests/test_orchestration_layout.py`): every import in `domain/**` is the standard library or starts with `domain`; none of `asyncio`, `logging`, `httpx`, `fastapi`, `contracts`, `shared_logging`, `application`, `infrastructure`, `composition_root`.
+- [x] Prove it bites: add a temporary `import asyncio` to one domain file, see the test fail, remove it.
 
 ## Verify before starting (is it partly done?)
 
@@ -21,8 +21,8 @@ A test that fails if the domain imports anything but the standard library and it
 
 ## Done when
 
-- [ ] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
-- [ ] The test fails on a deliberately wrong import and passes without it.
+- [x] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
+- [x] The test fails on a deliberately wrong import and passes without it.
 
 ## If it goes wrong
 
@@ -34,4 +34,4 @@ Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-1
 
 Append one line per work session: date, what was done, result, what is left.
 
-- (nothing yet)
+- 2026-10-01 - tests/mock/test_layout.py (ast purity check, also forbids stdlib asyncio/logging/threading/socket/subprocess/http/urllib). Proved it fails on a temporary import asyncio in operations/text.py, file restored. Gate 323 passed/14 skipped.

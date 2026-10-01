@@ -42,47 +42,47 @@ stopped at any point and picked up later by anyone (a person or another Claude s
 <!-- STATUS:START -->
 | Subtask | Title | Status |
 |---|---|---|
-| **T00-safety** | | 2/3 |
+| **T00-safety** | | 3/3 |
 | [T00-S01](T00-safety/S01-snapshot.md) | Snapshot of Brain | DONE |
 | [T00-S02](T00-safety/S02-baseline.md) | Record the baseline | DONE |
-| [T00-S03](T00-safety/S03-commit-baseline.md) | Decide: commit the baseline first? | TODO |
-| **T01-domain-layer** | | 0/5 |
-| [T01-S01](T01-domain-layer/S01-value-objects.md) | Value objects | TODO |
-| [T01-S02](T01-domain-layer/S02-entities.md) | Entities | TODO |
-| [T01-S03](T01-domain-layer/S03-operations.md) | Operations (pure functions) | TODO |
-| [T01-S04](T01-domain-layer/S04-errors.md) | Stream error factory in domain/errors.py | TODO |
-| [T01-S05](T01-domain-layer/S05-purity-test.md) | Domain purity test | TODO |
-| **T02-remove-unused-code** | | 0/3 |
-| [T02-S01](T02-remove-unused-code/S01-delete-unused-definitions.md) | Delete the unused definitions | TODO |
-| [T02-S02](T02-remove-unused-code/S02-clean-unused-imports.md) | Clean the unused imports | TODO |
-| [T02-S03](T02-remove-unused-code/S03-move-test-helpers.md) | Move the live-test helpers out of application | TODO |
-| **T03-adopt-domain** | | 0/9 |
-| [T03-S01](T03-adopt-domain/S01-mappers.md) | DTO <-> domain mappers | TODO |
-| [T03-S02](T03-adopt-domain/S02-agent-chain.md) | decide() uses the entities and the chain operations | TODO |
-| [T03-S03](T03-adopt-domain/S03-movement.md) | Movement rules in the stepper adapter and move_arms | TODO |
-| [T03-S04](T03-adopt-domain/S04-health.md) | Health rules (route and preflight) | TODO |
-| [T03-S05](T03-adopt-domain/S05-text-and-audio-format.md) | Text and audio-format rules in the bridges | TODO |
-| [T03-S06](T03-adopt-domain/S06-text-segment-counter.md) | CountedTextStream uses TextSegmentCounter | TODO |
-| [T03-S07](T03-adopt-domain/S07-settings-and-progress.md) | VoicePipelineSettings and ProgressMessages from the domain | TODO |
-| [T03-S08](T03-adopt-domain/S08-service-errors.md) | Error classification from the domain | TODO |
-| [T03-S09](T03-adopt-domain/S09-retire-models-py.md) | Retire domain/models.py | TODO |
-| **T04-application-layout** | | 0/4 |
-| [T04-S01](T04-application-layout/S01-ports-split.md) | Split the ports | TODO |
-| [T04-S02](T04-application-layout/S02-split-brain-service.md) | Split BrainService into a facade and four services | TODO |
-| [T04-S03](T04-application-layout/S03-streams-package.md) | streams/ package | TODO |
-| [T04-S04](T04-application-layout/S04-voice-pipeline-rename.md) | routes/ becomes voice_pipeline/ (steps/ and bridges/) | TODO |
-| **T05-infrastructure** | | 0/2 |
-| [T05-S01](T05-infrastructure/S01-split-base.md) | base.py becomes http_client.py and byte_streams.py | TODO |
-| [T05-S02](T05-infrastructure/S02-remove-upward-import.md) | Infrastructure no longer imports an application service | TODO |
-| **T06-tests-and-docs** | | 0/3 |
-| [T06-S01](T06-tests-and-docs/S01-reorganise-tests.md) | Mirror the layers in tests/mock | TODO |
-| [T06-S02](T06-tests-and-docs/S02-layout-test.md) | Full layout test | TODO |
-| [T06-S03](T06-tests-and-docs/S03-architecture-docs.md) | Docs match the code | TODO |
-| **T07-verification** | | 0/4 |
-| [T07-S01](T07-verification/S01-full-suites.md) | Run every suite | TODO |
-| [T07-S02](T07-verification/S02-mutation-checks.md) | Mutation checks on the moved rules | TODO |
-| [T07-S03](T07-verification/S03-snapshot-diff.md) | Compare with the snapshot | TODO |
-| [T07-S04](T07-verification/S04-close-out.md) | Close the plan | TODO |
+| [T00-S03](T00-safety/S03-commit-baseline.md) | Decide: commit the baseline first? | DONE |
+| **T01-domain-layer** | | 5/5 |
+| [T01-S01](T01-domain-layer/S01-value-objects.md) | Value objects | DONE |
+| [T01-S02](T01-domain-layer/S02-entities.md) | Entities | DONE |
+| [T01-S03](T01-domain-layer/S03-operations.md) | Operations (pure functions) | DONE |
+| [T01-S04](T01-domain-layer/S04-errors.md) | Stream error factory in domain/errors.py | DONE |
+| [T01-S05](T01-domain-layer/S05-purity-test.md) | Domain purity test | DONE |
+| **T02-remove-unused-code** | | 3/3 |
+| [T02-S01](T02-remove-unused-code/S01-delete-unused-definitions.md) | Delete the unused definitions | DONE |
+| [T02-S02](T02-remove-unused-code/S02-clean-unused-imports.md) | Clean the unused imports | DONE |
+| [T02-S03](T02-remove-unused-code/S03-move-test-helpers.md) | Move the live-test helpers out of application | DONE |
+| **T03-adopt-domain** | | 9/9 |
+| [T03-S01](T03-adopt-domain/S01-mappers.md) | DTO <-> domain mappers | DONE |
+| [T03-S02](T03-adopt-domain/S02-agent-chain.md) | decide() uses the entities and the chain operations | DONE |
+| [T03-S03](T03-adopt-domain/S03-movement.md) | Movement rules in the stepper adapter and move_arms | DONE |
+| [T03-S04](T03-adopt-domain/S04-health.md) | Health rules (route and preflight) | DONE |
+| [T03-S05](T03-adopt-domain/S05-text-and-audio-format.md) | Text and audio-format rules in the bridges | DONE |
+| [T03-S06](T03-adopt-domain/S06-text-segment-counter.md) | CountedTextStream uses TextSegmentCounter | DONE |
+| [T03-S07](T03-adopt-domain/S07-settings-and-progress.md) | VoicePipelineSettings and ProgressMessages from the domain | DONE |
+| [T03-S08](T03-adopt-domain/S08-service-errors.md) | Error classification from the domain | DONE |
+| [T03-S09](T03-adopt-domain/S09-retire-models-py.md) | Retire domain/models.py | DONE |
+| **T04-application-layout** | | 4/4 |
+| [T04-S01](T04-application-layout/S01-ports-split.md) | Split the ports | DONE |
+| [T04-S02](T04-application-layout/S02-split-brain-service.md) | Split BrainService into a facade and four services | DONE |
+| [T04-S03](T04-application-layout/S03-streams-package.md) | streams/ package | DONE |
+| [T04-S04](T04-application-layout/S04-voice-pipeline-rename.md) | routes/ becomes voice_pipeline/ (steps/ and bridges/) | DONE |
+| **T05-infrastructure** | | 2/2 |
+| [T05-S01](T05-infrastructure/S01-split-base.md) | base.py becomes http_client.py and byte_streams.py | DONE |
+| [T05-S02](T05-infrastructure/S02-remove-upward-import.md) | Infrastructure no longer imports an application service | DONE |
+| **T06-tests-and-docs** | | 3/3 |
+| [T06-S01](T06-tests-and-docs/S01-reorganise-tests.md) | Mirror the layers in tests/mock | DONE |
+| [T06-S02](T06-tests-and-docs/S02-layout-test.md) | Full layout test | DONE |
+| [T06-S03](T06-tests-and-docs/S03-architecture-docs.md) | Docs match the code | DONE |
+| **T07-verification** | | 4/4 |
+| [T07-S01](T07-verification/S01-full-suites.md) | Run every suite | DONE |
+| [T07-S02](T07-verification/S02-mutation-checks.md) | Mutation checks on the moved rules | DONE |
+| [T07-S03](T07-verification/S03-snapshot-diff.md) | Compare with the snapshot | DONE |
+| [T07-S04](T07-verification/S04-close-out.md) | Close the plan | DONE |
 <!-- STATUS:END -->
 
 ## Order and why

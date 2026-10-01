@@ -3,7 +3,7 @@ import os
 import pytest
 
 from application.dtos.outbound_dtos import TTSAudioStreamRequestDto, TTSSetStreamRequestDto
-from application.services.routes.stream_helpers import read_one_chunk
+from tests.shared.stream_probes import read_one_chunk
 from tests.shared.live_microservices import LiveMicroservices
 
 

@@ -1,21 +1,20 @@
 import httpx
 
-from contracts.api.microservices.common.availability import AvailabilityResponse
 from contracts.api.microservices.stt.process_batch import STTProcessBatchResponse
 from contracts.stream.schemas import STT_OUTBOUND
 
 from application.dtos.outbound_dtos import (
-    ExternalHealthResponseDto,
     STTBatchRequestDto,
     STTBatchResponseDto,
     STTSetStreamRequestDto,
     STTStreamResponseDto,
     STTTextStreamRequestDto,
 )
-from application.ports.outbound_ports import STTPort
+from application.ports.outbound.stt_port import STTPort
 from shared_logging import get_logger
 from domain.errors import ExternalServiceTimeoutError, ExternalServiceUnavailableError
-from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig, _stream_timeout
+from infrastructure.outbound.http.byte_streams import stream_timeout
+from infrastructure.outbound.http.http_client import HttpServiceClient, HttpServiceConfig
 
 logger = get_logger(__name__)
 
@@ -54,7 +53,7 @@ class HttpSTTAdapter(HttpServiceClient, STTPort):
                 params=params,
                 content=request.audio_stream,
                 headers=self._headers({"Content-Type": "application/x-ndjson"}),
-                timeout=_stream_timeout(self._config.timeout_seconds),  # ack ends with the upload
+                timeout=stream_timeout(self._config.timeout_seconds),  # ack ends with the upload
             )
             self._raise_for_expected_status(response)
             self._raise_for_ack_errors(response, STT_OUTBOUND)

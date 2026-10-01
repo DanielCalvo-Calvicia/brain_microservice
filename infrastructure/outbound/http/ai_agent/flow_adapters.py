@@ -1,8 +1,8 @@
-from application.ports.outbound_ports import AgentFlowPort
+from application.ports.outbound.agent_flow_port import AgentFlowPort
 from infrastructure.outbound.http.ai_agent.agent_client import AIAgentFlowClient
 from infrastructure.outbound.http.ai_agent.conversation_flow_adapter import HttpConversationFlowAdapter
 from infrastructure.outbound.http.ai_agent.motion_flow_adapter import HttpMotionFlowAdapter
-from infrastructure.outbound.http.base import HttpServiceConfig
+from infrastructure.outbound.http.http_client import HttpServiceConfig
 
 # The flows of ai-agent Brain knows how to talk to, by name. A new flow of ai-agent = its adapter (decode the
 # answer of its contract into AgentFlowResultDto) + one line here; then list its name in AI_AGENT_FLOWS.

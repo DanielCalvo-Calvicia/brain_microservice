@@ -1,19 +1,18 @@
 import httpx
 
-from contracts.api.microservices.common.availability import AvailabilityResponse
 from contracts.stream.schemas import TTS_INPUT_ACK
 
 from application.dtos.outbound_dtos import (
-    ExternalHealthResponseDto,
     TTSAudioStreamRequestDto,
     TTSAudioStreamResponseDto,
     TTSSetStreamRequestDto,
     TTSTextStreamRequestDto,
 )
-from application.ports.outbound_ports import TTSPort
+from application.ports.outbound.tts_port import TTSPort
 from shared_logging import get_logger
 from domain.errors import ExternalServiceTimeoutError, ExternalServiceUnavailableError
-from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig, _stream_timeout
+from infrastructure.outbound.http.byte_streams import stream_timeout
+from infrastructure.outbound.http.http_client import HttpServiceClient, HttpServiceConfig
 
 logger = get_logger(__name__)
 
@@ -80,7 +79,7 @@ class HttpTTSAdapter(HttpServiceClient, TTSPort):
                 params={"sample_rate": sample_rate, "channels": channels},
                 content=text_stream,
                 headers=self._headers({"Content-Type": "application/x-ndjson"}),
-                timeout=_stream_timeout(self._config.timeout_seconds),  # ack ends with the upload
+                timeout=stream_timeout(self._config.timeout_seconds),  # ack ends with the upload
             )
             self._raise_for_status(response)
             self._raise_for_ack_errors(response, TTS_INPUT_ACK)

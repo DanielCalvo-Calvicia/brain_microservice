@@ -1,6 +1,6 @@
 # T06-S01: Mirror the layers in tests/mock
 
-Status: TODO
+Status: DONE
 Task: T06 tests-and-docs | Depends on: T05 | Size: M
 
 > Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`. Change the `Status:` line above (nothing else needs updating: `docs/tasks/status.py` reads it).
@@ -12,10 +12,10 @@ The test folders follow the code folders (see the tree in `docs/brain_restructur
 
 ## Do
 
-- [ ] `tests/mock/external_microservices/*` -> `tests/mock/infrastructure/outbound_http/*` (`test_upload_acknowledgements.py` -> `tests/mock/infrastructure/`; `test_stream_stage_logging.py` -> `tests/mock/application/streams/`).
-- [ ] `tests/mock/flows/*` -> `tests/mock/application/voice_pipeline/*`.
-- [ ] `tests/mock/project/`: `test_brain_service`, `test_brain_decide` (rename `test_agent_service`), `test_agent_flow_session`, `test_health_stages` (rename `test_health_service`) -> `tests/mock/application/services/`; `test_config`, `test_config_flows`, `test_environment`, `test_startup_pipeline`, `test_tracing` -> `tests/mock/composition_root/`.
-- [ ] Keep `tests/live/` and `tests/shared/`. Fix `pytest.ini` / `conftest.py` paths if they name folders. Test file base names must stay unique or every folder needs an `__init__.py` (check how `tests/` imports `tests.shared`).
+- [x] `tests/mock/external_microservices/*` -> `tests/mock/infrastructure/outbound_http/*` (`test_upload_acknowledgements.py` -> `tests/mock/infrastructure/`; `test_stream_stage_logging.py` -> `tests/mock/application/streams/`).
+- [x] `tests/mock/flows/*` -> `tests/mock/application/voice_pipeline/*`.
+- [x] `tests/mock/project/`: `test_brain_service`, `test_brain_decide` (rename `test_agent_service`), `test_agent_flow_session`, `test_health_stages` (rename `test_health_service`) -> `tests/mock/application/services/`; `test_config`, `test_config_flows`, `test_environment`, `test_startup_pipeline`, `test_tracing` -> `tests/mock/composition_root/`.
+- [x] Keep `tests/live/` and `tests/shared/`. Fix `pytest.ini` / `conftest.py` paths if they name folders. Test file base names must stay unique or every folder needs an `__init__.py` (check how `tests/` imports `tests.shared`).
 
 ## Verify before starting (is it partly done?)
 
@@ -23,8 +23,8 @@ The test folders follow the code folders (see the tree in `docs/brain_restructur
 
 ## Done when
 
-- [ ] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14. The number of collected tests is unchanged (compare `pytest --collect-only -q | Select-Object -Last 1`).
-- [ ] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
+- [x] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14. The number of collected tests is unchanged (compare `pytest --collect-only -q | Select-Object -Last 1`).
+- [x] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
 
 ## If it goes wrong
 
@@ -36,4 +36,4 @@ Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-1
 
 Append one line per work session: date, what was done, result, what is left.
 
-- (nothing yet)
+- 2026-10-01 - tests/mock now mirrors the layers: application/{dtos,services,streams,voice_pipeline}, composition_root, domain, infrastructure/outbound_http. external_microservices->infrastructure/outbound_http, flows->application/voice_pipeline (counted_text_stream->streams, progress_messages->services), project split into application/services (brain_service, agent_service [was brain_decide], agent_service_invalid_movement, agent_flow_session, health_service [was health_stages]) and composition_root (config, config_flows, environment, startup_pipeline, tracing). One cross-test import fixed. Collected 358 before and after; Brain 344/14, contracts 57/20. Folder READMEs moved with the folders; rewritten in T06-S03.

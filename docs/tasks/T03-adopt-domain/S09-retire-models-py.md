@@ -1,6 +1,6 @@
 # T03-S09: Retire domain/models.py
 
-Status: TODO
+Status: DONE
 Task: T03 adopt-domain | Depends on: T03-S02, T03-S04 | Size: S
 
 > Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`. Change the `Status:` line above (nothing else needs updating: `docs/tasks/status.py` reads it).
@@ -12,8 +12,8 @@ Task: T03 adopt-domain | Depends on: T03-S02, T03-S04 | Size: S
 
 ## Do
 
-- [ ] Replace the importers of `domain.models` (`application/services/service.py`, `application/dtos/service_dtos.py`, tests) and delete `domain/models.py`.
-- [ ] Use `Select-String` for `domain.models` to confirm nothing is left.
+- [x] Replace the importers of `domain.models` (`application/services/service.py`, `application/dtos/service_dtos.py`, tests) and delete `domain/models.py`.
+- [x] Use `Select-String` for `domain.models` to confirm nothing is left.
 
 ## Verify before starting (is it partly done?)
 
@@ -21,9 +21,9 @@ Task: T03 adopt-domain | Depends on: T03-S02, T03-S04 | Size: S
 
 ## Done when
 
-- [ ] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
-- [ ] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
-- [ ] `domain/` now holds `errors.py`, `value_objects/`, `entities/`, `operations/` only.
+- [x] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
+- [x] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
+- [x] `domain/` now holds `errors.py`, `value_objects/`, `entities/`, `operations/` only.
 
 ## If it goes wrong
 
@@ -35,4 +35,4 @@ Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-1
 
 Append one line per work session: date, what was done, result, what is left.
 
-- (nothing yet)
+- 2026-10-01 - service_dtos.py and service.py import ServiceStatus from domain.value_objects; domain/models.py deleted; no domain.models reference left. Brain 344/14, contracts 57/20, ruff clean.

@@ -2,10 +2,10 @@ import httpx
 from contracts.api.microservices.microphone.start import MicrophoneConfig
 
 from application.dtos.outbound_dtos import MicrophoneStreamRequestDto, MicrophoneStreamResponseDto
-from application.ports.outbound_ports import MicrophonePort
+from application.ports.outbound.microphone_port import MicrophonePort
 from shared_logging import get_logger
 from domain.errors import ExternalServiceTimeoutError, ExternalServiceUnavailableError
-from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig
+from infrastructure.outbound.http.http_client import HttpServiceClient, HttpServiceConfig
 
 logger = get_logger(__name__)
 

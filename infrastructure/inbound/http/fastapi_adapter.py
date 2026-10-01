@@ -16,7 +16,7 @@ from application.dtos.mapper.inbound_to_service import (
     map_text_to_speech_request,
     map_voice_pipeline_request,
 )
-from application.ports.service_port import BrainServicePort
+from application.ports.inbound.brain_service_port import BrainServicePort
 from shared_logging import get_logger
 from domain.errors import BrainMicroserviceError
 

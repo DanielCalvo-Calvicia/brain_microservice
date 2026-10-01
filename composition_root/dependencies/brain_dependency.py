@@ -3,13 +3,13 @@ from dataclasses import dataclass
 from fastapi import FastAPI
 from shared_logging import TracingMiddleware
 
-from application.services.service import BrainService
+from application.services.brain_service import BrainService
 from composition_root.config import AppConfig
 from infrastructure.inbound.http.fastapi_adapter import FastApiAdapter
-from application.ports.outbound_ports import AgentFlowPort
-from application.services.progress import ProgressMessages
+from application.ports.outbound.agent_flow_port import AgentFlowPort
+from domain.value_objects.progress_messages import ProgressMessages
 from infrastructure.outbound.http.ai_agent.flow_adapters import build_flow_adapters
-from infrastructure.outbound.http.base import HttpServiceConfig
+from infrastructure.outbound.http.http_client import HttpServiceConfig
 from infrastructure.outbound.http.microphone.microphone_adapter import HttpMicrophoneAdapter
 from infrastructure.outbound.http.speaker.speaker_adapter import HttpSpeakerAdapter
 from infrastructure.outbound.http.stepper.stepper_adapter import HttpStepperAdapter

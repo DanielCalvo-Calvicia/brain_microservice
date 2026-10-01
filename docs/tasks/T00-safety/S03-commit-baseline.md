@@ -1,6 +1,6 @@
 # T00-S03: Decide: commit the baseline first?
 
-Status: TODO
+Status: DONE
 Task: T00 safety | Depends on: T00-S02 | Size: S
 
 > Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`. Change the `Status:` line above (nothing else needs updating: `docs/tasks/status.py` reads it).
@@ -12,8 +12,8 @@ Optional but recommended: put the working tree on a commit so the restructure ha
 
 ## Do
 
-- [ ] Ask the user. If NO: write `SKIPPED (user)` in the Log and set the status to DONE. The snapshot stays the only baseline, so never use `git checkout` or `git stash` in Brain.
-- [ ] If YES: `git -C brain_microservice add -A -- . ':(exclude,glob)**/__pycache__/**' ':(exclude,glob)**/*.pyc' ':(exclude,glob)**/.env'` then commit (message: what the uncommitted work is: flows chain, progress messages, tests, docs) and push to `feature_ai_claude_2` only if asked.
+- [x] Ask the user. If NO: write `SKIPPED (user)` in the Log and set the status to DONE. The snapshot stays the only baseline, so never use `git checkout` or `git stash` in Brain.
+- [x] If YES: `git -C brain_microservice add -A -- . ':(exclude,glob)**/__pycache__/**' ':(exclude,glob)**/*.pyc' ':(exclude,glob)**/.env'` then commit (message: what the uncommitted work is: flows chain, progress messages, tests, docs) and push to `feature_ai_claude_2` only if asked.
 
 ## Verify before starting (is it partly done?)
 
@@ -21,7 +21,7 @@ Optional but recommended: put the working tree on a commit so the restructure ha
 
 ## Done when
 
-- [ ] The user's answer is in the Log and the status is DONE.
+- [x] The user's answer is in the Log and the status is DONE.
 
 ## If it goes wrong
 
@@ -33,4 +33,4 @@ Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-1
 
 Append one line per work session: date, what was done, result, what is left.
 
-- (nothing yet)
+- 2026-10-01 - user said YES (commit it first, then start T01). Committed as `5542919` on `feature_ai_claude_2` (76 files; bytecode, `.env` and `windows\` excluded; no secrets staged). NOT pushed: the user asked only for the commit. Rollback baseline is still the snapshot; git now also has this commit as a baseline (`git diff 5542919` shows everything done by the restructure). DONE.

@@ -1,6 +1,6 @@
 # Brain restructure plan (domain layer, application layout, infrastructure split)
 
-Status: **APPROVED, NOT STARTED.** All four decisions are taken (see the end). The step-by-step execution, with a status per subtask so the work can be stopped and resumed, is in `docs/tasks/` (start with `docs/tasks/README.md`). Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-10-01`.
+Status: **IMPLEMENTED 2026-10-01** (see "As built" at the end). All four decisions were taken (see the end). The step-by-step execution, with a status per subtask so the work can be stopped and resumed, is in `docs/tasks/` (start with `docs/tasks/README.md`). Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-10-01`.
 Written 2026-10-01 from the code of branch `feature_ai_claude_2`. Baseline to keep green: Brain 176 tests (14 live skipped),
 `contracts/tests` (fake-hardware pipeline + the 9 Brain-to-ai-agent tests), ai-agent 604 (untouched), deployment 232.
 
@@ -258,3 +258,25 @@ Order matters: phases 1 and 2 give the domain its content while the old layout s
 2. **DTOs: TAKEN, they all stay.** They are the compulsory boundary between application and infrastructure; the domain is used inside the application through mappers.
 3. **Contract-event handling: TAKEN, it stays in application** (`streams/events.py`). Typed events through the ports is a possible later plan.
 4. **Delete unused code: TAKEN, yes.** The list is in "Unused code found".
+
+## As built (2026-10-01)
+
+Everything in the plan was done, in the order of `docs/tasks/` (33 subtasks). Results: Brain 360 passed / 14 skipped (baseline 176),
+`contracts/tests` 57 passed / 20 skipped, ai-agent 604 passed (untouched). Nothing ran against real services (no hardware or live
+microservices); the e2e tests use real processes with fake hardware and a scripted LLM. Differences from the plan:
+
+- `AudioFormat.describe()` returns `24000 Hz x 1` (no "channel(s)"), to keep the old TTS mismatch message identical. The audio
+  operations take plain numbers, not an `AudioFormat`, because the wire can announce values the value object refuses.
+- `AgentFlow.lost_session` takes the error code, not a result.
+- A movement ai-agent sends that the domain does not accept (unknown arm or direction, non-finite degrees) stops the sequence at
+  that point and the flow's speech is kept (`AgentService`, `_to_domain_result`); the stepper adapter raises `ValueError` for it
+  if called directly, which `move_arm` turns into a failed move.
+- Invalid `VoicePipelineSettings` now fail with `ValueError` naming the field before any stream opens (HTTP 500 on `/voice/pipeline`).
+- `BrainService.stepper_port` is a property with a setter (the e2e test swaps the stepper after construction); `agent_flows` and
+  `progress` are read-only properties of the facade.
+- `stream_helpers.py` went to `tests/shared/stream_probes.py` (only live tests used it).
+- New tests beyond the plan: equivalence/wiring tests for the operations, `test_readiness_messages`, `test_counted_text_stream`,
+  `test_voice_pipeline_settings`, `test_agent_service_invalid_movement`, the mappers, and a layout test for all three layers.
+- Verification: four mutation checks (dialogue routing, direction flip, directives of failed flows, default flow order) each fail the
+  expected tests; the sha256 diff against the snapshot (163 added, 63 removed, 32 changed) is fully accounted for.
+- Not pushed: all of it is local; the baseline commit is `5542919` and everything after it is uncommitted.

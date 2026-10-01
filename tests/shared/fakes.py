@@ -25,9 +25,9 @@ from application.dtos.outbound_dtos import (
     TTSSetStreamRequestDto,
     TTSTextStreamRequestDto,
 )
-from application.services.progress import ProgressMessages
-from application.services.service import BrainService
-from application.services.routes.stream_internal.external_events import ndjson_events
+from domain.value_objects.progress_messages import ProgressMessages
+from application.services.brain_service import BrainService
+from application.services.streams.events import ndjson_events
 from contracts.stream.codec import EventSequencer, encode_ndjson, encode_sse
 from contracts.stream.common.base import EventType
 from contracts.stream.common.start_stream import StartStreamEvent
@@ -68,7 +68,7 @@ from contracts.stream.microservices.tts.outbound.partial import (
     PartialOutboundEventDTO as TTSPartialOutboundEventDTO,
 )
 from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND, TTS_INBOUND
-from tests.shared.streams import byte_stream, text_stream
+from tests.shared.streams import text_stream
 
 
 SERVICE_NAMES = ("microphone", "stt", "tts", "speaker")

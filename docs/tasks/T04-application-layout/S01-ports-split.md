@@ -1,6 +1,6 @@
 # T04-S01: Split the ports
 
-Status: TODO
+Status: DONE
 Task: T04 application-layout | Depends on: T03 | Size: M
 
 > Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`. Change the `Status:` line above (nothing else needs updating: `docs/tasks/status.py` reads it).
@@ -12,9 +12,9 @@ Task: T04 application-layout | Depends on: T03 | Size: M
 
 ## Do
 
-- [ ] `application/ports/service_port.py` -> `application/ports/inbound/brain_service_port.py`.
-- [ ] `application/ports/outbound_ports.py` -> `outbound/{health_port,microphone_port,stt_port,tts_port,speaker_port,agent_flow_port,stepper_port}.py`.
-- [ ] Rewrite every importer with a script (Brain code, `tests/`, `D:\Hobbys\IA\OBLIVION\contracts\tests`): old `application.ports.outbound_ports` and `application.ports.service_port` must disappear. Keep a copy of the script in the Log.
+- [x] `application/ports/service_port.py` -> `application/ports/inbound/brain_service_port.py`.
+- [x] `application/ports/outbound_ports.py` -> `outbound/{health_port,microphone_port,stt_port,tts_port,speaker_port,agent_flow_port,stepper_port}.py`.
+- [x] Rewrite every importer with a script (Brain code, `tests/`, `D:\Hobbys\IA\OBLIVION\contracts\tests`): old `application.ports.outbound_ports` and `application.ports.service_port` must disappear. Keep a copy of the script in the Log.
 
 ## Verify before starting (is it partly done?)
 
@@ -22,9 +22,9 @@ Task: T04 application-layout | Depends on: T03 | Size: M
 
 ## Done when
 
-- [ ] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
-- [ ] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
-- [ ] `Select-String` for `outbound_ports` and `service_port` over Brain and `contracts\tests` finds nothing.
+- [x] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
+- [x] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
+- [x] `Select-String` for `outbound_ports` and `service_port` over Brain and `contracts\tests` finds nothing.
 
 ## If it goes wrong
 
@@ -36,4 +36,4 @@ Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-1
 
 Append one line per work session: date, what was done, result, what is left.
 
-- (nothing yet)
+- 2026-10-01 - Ports split into ports/inbound/brain_service_port.py and ports/outbound/{health,microphone,stt,tts,speaker,agent_flow,stepper}_port.py by scratchpad script split_ports.py (ast-based: parse old classes, write one file each with only the DTO imports it needs, rewrite every importer incl. multi-line imports, delete old modules). 21 importers rewritten; no outbound_ports/service_port reference left in code. Brain 344/14, contracts 57/20, ruff clean.

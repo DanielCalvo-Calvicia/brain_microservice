@@ -4,25 +4,37 @@ from application.dtos.outbound_dtos import (
     AIAgentEndSessionRequestDto,
     AIAgentStartSessionRequestDto,
 )
-from application.ports.outbound_ports import AgentFlowPort
+from application.ports.outbound.agent_flow_port import AgentFlowPort
 from shared_logging import get_logger
-from domain.errors import ExternalServiceUnavailableError
+from domain.entities.agent_flow import SESSION_NOT_FOUND, AgentFlow
 
 logger = get_logger(__name__)
 
-SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
+__all__ = ["AgentFlowSession", "SESSION_NOT_FOUND"]
 
 
 class AgentFlowSession:
     """Brain's session with one flow of ai-agent: opens it, asks it, reconnects once when ai-agent forgot it.
 
     ai-agent keeps sessions in memory only, so a restart loses them (see ai-agent/README.md's "Session
-    lifecycle"). Every flow has its own session, so each flow of ai-agent gets one of these.
+    lifecycle"). Every flow has its own session, so each flow of ai-agent gets one of these. The session id and
+    the rules about it live in the domain entity ``flow``; this class does the calls.
     """
 
     def __init__(self, port: AgentFlowPort) -> None:
         self.port = port
-        self.session_id: str | None = None
+        self.flow = AgentFlow(port.name)
+
+    @property
+    def session_id(self) -> str | None:
+        return self.flow.session_id
+
+    @session_id.setter
+    def session_id(self, value: str | None) -> None:
+        if value:
+            self.flow.open(value)
+        else:
+            self.flow.forget()
 
     @property
     def name(self) -> str:
@@ -33,7 +45,7 @@ class AgentFlowSession:
         try:
             response = await self.port.start_session(AIAgentStartSessionRequestDto())
             if response.success:
-                self.session_id = response.session_id
+                self.session_id = response.session_id  # an empty id leaves the flow without a session
                 logger.info("ai-agent flow session started", flow=self.name, session_id=response.session_id)
             else:
                 logger.warning("ai-agent flow session start was not successful", flow=self.name, detail=response.message)
@@ -49,22 +61,21 @@ class AgentFlowSession:
         except Exception as exc:
             logger.error("ai-agent flow session end failed", flow=self.name, session_id=self.session_id, error=str(exc))
         finally:
-            self.session_id = None
+            self.flow.close()
 
     async def ask(self, text: str) -> AgentFlowResultDto:
         """The flow's decision for ``text``. Raises ExternalServiceUnavailableError when no session can be opened."""
         if not self.session_id:
             await self.start()
-        if not self.session_id:
-            raise ExternalServiceUnavailableError("ai_agent", f"no {self.name} session could be established")
+        session_id = self.flow.require_session()
 
-        result = await self.port.message(AgentFlowRequestDto(session_id=self.session_id, message=text))
-        if result.error_code != SESSION_NOT_FOUND:
+        result = await self.port.message(AgentFlowRequestDto(session_id=session_id, message=text))
+        if not AgentFlow.lost_session(result.error_code):
             return result
 
         logger.info("ai-agent flow session was gone; starting a new one and retrying once", flow=self.name)
-        self.session_id = None
+        self.flow.forget()
         await self.start()
-        if not self.session_id:
+        if not self.flow.has_session:
             return result
-        return await self.port.message(AgentFlowRequestDto(session_id=self.session_id, message=text))
+        return await self.port.message(AgentFlowRequestDto(session_id=self.flow.require_session(), message=text))

@@ -4,14 +4,14 @@ from contracts.stream.common.base import EventType
 from contracts.stream.schemas import SPEAKER_OUTBOUND
 
 from application.dtos.outbound_dtos import SpeakerPlaybackRequestDto, SpeakerPlaybackResponseDto
-from infrastructure.outbound.http.base import _stream_timeout  # no read timeout for long audio
-from application.ports.outbound_ports import SpeakerPort
+from infrastructure.outbound.http.byte_streams import stream_timeout  # no read timeout for long audio
+from application.ports.outbound.speaker_port import SpeakerPort
 from shared_logging import get_logger
 from domain.errors import (
     ExternalServiceTimeoutError,
     ExternalServiceUnavailableError,
 )
-from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig
+from infrastructure.outbound.http.http_client import HttpServiceClient, HttpServiceConfig
 
 logger = get_logger(__name__)
 
@@ -42,7 +42,7 @@ class HttpSpeakerAdapter(HttpServiceClient, SpeakerPort):
                 },
                 content=request.audio_stream,
                 headers=self._headers({"Content-Type": "application/x-ndjson"}),
-                timeout=_stream_timeout(self._config.timeout_seconds),
+                timeout=stream_timeout(self._config.timeout_seconds),
             )
             self._raise_for_expected_status(response)
             events = self._raise_for_ack_errors(response, SPEAKER_OUTBOUND)

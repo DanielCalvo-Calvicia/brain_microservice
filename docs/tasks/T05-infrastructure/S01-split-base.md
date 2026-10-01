@@ -1,6 +1,6 @@
 # T05-S01: base.py becomes http_client.py and byte_streams.py
 
-Status: TODO
+Status: DONE
 Task: T05 infrastructure | Depends on: T04 | Size: M
 
 > Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`. Change the `Status:` line above (nothing else needs updating: `docs/tasks/status.py` reads it).
@@ -12,9 +12,9 @@ One concern per file.
 
 ## Do
 
-- [ ] `HttpServiceConfig` and `HttpServiceClient` (health, JSON, status mapping, ack check) -> `infrastructure/outbound/http/http_client.py`.
-- [ ] `_OpenedHttpByteStream`, `_stream_timeout` and the streaming helpers -> `byte_streams.py`.
-- [ ] Delete `base.py`; rewrite every importer (all adapters, tests, `contracts\tests\e2e`: search `http.base`).
+- [x] `HttpServiceConfig` and `HttpServiceClient` (health, JSON, status mapping, ack check) -> `infrastructure/outbound/http/http_client.py`.
+- [x] `_OpenedHttpByteStream`, `_stream_timeout` and the streaming helpers -> `byte_streams.py`.
+- [x] Delete `base.py`; rewrite every importer (all adapters, tests, `contracts\tests\e2e`: search `http.base`).
 
 ## Verify before starting (is it partly done?)
 
@@ -22,9 +22,9 @@ One concern per file.
 
 ## Done when
 
-- [ ] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
-- [ ] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
-- [ ] `Select-String` for `http.base` over Brain and `contracts\tests` finds nothing.
+- [x] From `brain_microservice`: `windows\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` gives no failure; passed is at least the baseline (176) plus every test added so far; skipped stays 14.
+- [x] From the workspace root `D:\Hobbys\IA\OBLIVION`: `brain_microservice\windows\Scripts\python.exe -m pytest contracts\tests -q -p no:cacheprovider` gives 57 passed, 20 skipped (the skipped ones need real LLM keys).
+- [x] `Select-String` for `http.base` over Brain and `contracts\tests` finds nothing.
 
 ## If it goes wrong
 
@@ -36,4 +36,4 @@ Baseline snapshot: `D:\Hobbys\IA\OBLIVION_snapshots\pre_brain_restructure_2026-1
 
 Append one line per work session: date, what was done, result, what is left.
 
-- (nothing yet)
+- 2026-10-01 - base.py split: http_client.py (HttpServiceConfig, HttpServiceClient) and byte_streams.py (open_byte_stream, OpenedHttpByteStream, stream_timeout; HttpServiceClient._open_bytes_from_stream delegates). Adapters/tests/contracts importers rewritten with sed; _stream_timeout -> stream_timeout. base.py deleted. Brain 344/14, contracts 57/20, ruff clean.

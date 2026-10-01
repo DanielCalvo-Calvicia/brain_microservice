@@ -2,17 +2,15 @@ import httpx
 
 from contracts.api.microservices.stepper.batch import StepperBatchResult
 
+from application.dtos.mapper.outbound_to_domain import to_directive
 from application.dtos.outbound_dtos import MotorDirectiveDto, StepperMoveResponseDto
-from application.ports.outbound_ports import StepperPort
+from application.ports.outbound.stepper_port import StepperPort
 from shared_logging import get_logger
 from domain.errors import ExternalServiceTimeoutError, ExternalServiceUnavailableError
-from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConfig
+from domain.operations.movement import rotation_of
+from infrastructure.outbound.http.http_client import HttpServiceClient, HttpServiceConfig
 
 logger = get_logger(__name__)
-
-
-def _opposite(direction: str) -> str:
-    return "reverse" if direction == "forward" else "forward"
 
 
 class HttpStepperAdapter(HttpServiceClient, StepperPort):
@@ -37,11 +35,9 @@ class HttpStepperAdapter(HttpServiceClient, StepperPort):
 
     async def move(self, directive: MotorDirectiveDto) -> StepperMoveResponseDto:
         stepper_id = self._left_arm_stepper_id if directive.arm == "left" else self._right_arm_stepper_id
-        # Degrees are signed ("left 90" then "left -90" brings the arm back), but stepper only reads the size of
-        # `rotations` (it takes its absolute value) and the direction says which way: a negative number of
-        # degrees is the same rotation the other way.
-        rotations = abs(directive.degrees) / 360.0
-        direction = directive.direction if directive.degrees >= 0 else _opposite(directive.direction)
+        # Degrees are signed and stepper only reads the size of `rotations`: the domain turns them into a size
+        # and a direction (a negative number of degrees is the same rotation the other way).
+        rotations, direction = rotation_of(to_directive(directive))
         endpoint = self._rotate_endpoint_template.format(stepper_id=stepper_id)
         params = {"rotations": rotations, "rpm": self._default_rpm, "direction": direction}
         logger.info(

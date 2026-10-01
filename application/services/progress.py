@@ -1,23 +1,12 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import TypeVar
 
+from domain.value_objects.progress_messages import ProgressMessages
+
+__all__ = ["ProgressMessages", "run_with_progress"]
+
 T = TypeVar("T")
-
-
-@dataclass(frozen=True, slots=True)
-class ProgressMessages:
-    """What Brain says while ai-agent's flows are working, so the user is never left in silence.
-
-    ``received`` is said as soon as an utterance arrives from STT; ``thinking`` is said every
-    ``interval_seconds`` while the flows are still running. An empty text is never said, and an interval of 0
-    or less turns the thinking messages off.
-    """
-
-    received: str = "Message received."
-    thinking: str = "Thinking."
-    interval_seconds: float = 2.0
 
 
 async def run_with_progress(work: Awaitable[T], say: Callable[[str], Awaitable[None]], messages: ProgressMessages) -> T:
@@ -28,7 +17,7 @@ async def run_with_progress(work: Awaitable[T], say: Callable[[str], Awaitable[N
     """
     task = asyncio.ensure_future(work)
     try:
-        if messages.interval_seconds <= 0 or not messages.thinking.strip():
+        if not messages.thinking_enabled:
             return await task
         while True:
             done, _ = await asyncio.wait({task}, timeout=messages.interval_seconds)

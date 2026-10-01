@@ -1,8 +1,9 @@
 import asyncio
 
-from application.services.service import BrainService
+from application.services.brain_service import BrainService
 from composition_root.config import AppConfig
 from shared_logging import get_logger
+from domain.operations.health import readiness_problem
 
 logger = get_logger(__name__)
 
@@ -47,12 +48,12 @@ async def _wait_until_microservices_are_ready(service: BrainService, config: App
         attempt += 1
         logger.info("checking all external microservices are fully loaded", attempt=attempt)
         health = await service.check_integrations()
-        unavailable = [status for status in health.services if not status.is_available]
-        if not unavailable:
+        problem = readiness_problem(health.services)
+        if problem is None:
             logger.info("all external microservices are active and ready", attempts=attempt)
             return
 
-        last_unavailable = "; ".join(f"{status.name}: {status.detail}" for status in unavailable)
+        last_unavailable = problem
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise StartupPreflightError(

@@ -1,7 +1,7 @@
 from contracts.api.microservices.ai_agent.session import AIAgentMessageResponse
 
 from application.dtos.outbound_dtos import AgentFlowRequestDto, AgentFlowResultDto
-from application.ports.outbound_ports import AgentFlowPort
+from application.ports.outbound.agent_flow_port import AgentFlowPort
 from shared_logging import get_logger
 from infrastructure.outbound.http.ai_agent.agent_client import AIAgentFlowClient
 

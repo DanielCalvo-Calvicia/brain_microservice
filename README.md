@@ -76,7 +76,7 @@ FastApiAdapter
       -> StepperPort   -> HttpStepperAdapter   (called from the STT-to-TTS route on a movement decision; see below)
 ```
 
-Since 2026-09-22, `application/services/routes/stream_internal/stt_to_tts.py` calls ai-agent instead of echoing STT text straight to TTS. Since 2026-09-29 it decides **once per STT `completed` event** (STT's own silence detection marks each utterance boundary), not once per pipeline run, and keeps listening for the next utterance for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). `max_text_segments` (0 = unlimited) only caps how many of those decisions get made, for bounded/test runs; production leaves it at 0. Only ai-agent's words — never the raw STT text — reach TTS.
+Since 2026-09-22, `application/services/voice_pipeline/bridges/stt_to_tts.py` calls ai-agent instead of echoing STT text straight to TTS. Since 2026-09-29 it decides **once per STT `completed` event** (STT's own silence detection marks each utterance boundary), not once per pipeline run, and keeps listening for the next utterance for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). `max_text_segments` (0 = unlimited) only caps how many of those decisions get made, for bounded/test runs; production leaves it at 0. Only ai-agent's words — never the raw STT text — reach TTS.
 
 **What the user hears while ai-agent works** (`application/services/progress.py`): as soon as an utterance arrives Brain says `message received` (`PROGRESS_RECEIVED_MESSAGE`); while ai-agent's flows run Brain says `thinking` (`PROGRESS_THINKING_MESSAGE`) every 2 seconds (`PROGRESS_THINKING_INTERVAL_SECONDS`; the first one after one interval, so a quick answer stays quiet); only when **all** the flows have ended does it say the answer and send the movements to the stepper. The flows are asked **one after the other, in order, each only when the one before has ended** (`BrainService.decide()`): conversation-flow writes the reply and motion-flow, last, decides the movements. What each flow says is spoken in order (for example the reply, then motion-flow's refusal or question). A flow that asks the user a question (`awaiting_user_input`) stops the chain, and the next utterance, which is the answer, goes only to that flow. A flow that cannot be reached is skipped (an accepted movement is never cancelled because another flow was down); if none can be reached Brain speaks a fixed apology. Each flow keeps its own session, opened at startup on a best-effort basis (its failure never stops Brain from starting) or lazily, with one automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only).
 
@@ -160,27 +160,27 @@ Wire formats:
 
 ## 5. Voice Pipeline
 
-The full voice pipeline is implemented by `application/services/pipeline.py` and isolated route files under `application/services/routes/`. Each route is an independent connection between two microservices' streams (mic->STT, STT->TTS, TTS->speaker, ...), not a fixed algorithmic step — "route" names that; see `application/services/ROUTE_INDEX.md`.
+The full voice pipeline is implemented by `application/services/voice_pipeline/pipeline.py`, with one file per **step** (`steps/`: open or start one stream of one microservice) and per **bridge** (`bridges/`: copy one stream into the next through an internal pipe). See `docs/ARCHITECTURE.md`.
 
-`VoicePipelineFlow` runs all 10 routes once in order. The SET and GET streams are opened during setup, before the user speaks. The pipeline then waits for live streams to complete naturally, or stays alive when upstream streams stay open. On shutdown, background tasks are cancelled via `cancel_pending_tasks()`.
+`VoicePipelineFlow` runs all 10 steps and bridges once in order. The SET and GET streams are opened during setup, before the user speaks. The pipeline then waits for live streams to complete naturally, or stays alive when upstream streams stay open. On shutdown, background tasks are cancelled via `cancel_pending_tasks()`.
 
-Route order:
+Order:
 
 | Order | File | Responsibility |
 | --- | --- | --- |
-| 1 | `routes/health_check/health_check.py` | Check all required integrations. |
-| 2 | `routes/stream_get/get_mic_stream.py` | Open the microphone stream. |
-| 3 | `routes/stream_set/set_stt_stream.py` | Start STT SET from the STT input connector. |
-| 4 | `routes/stream_get/get_stt_stream.py` | Open STT GET for text output. |
-| 5 | `routes/stream_set/set_tts_stream.py` | Start TTS SET from the TTS input connector. |
-| 6 | `routes/stream_get/get_tts_stream.py` | Open TTS GET for audio output. |
-| 7 | `routes/stream_set/set_speaker_stream.py` | Start speaker playback from the speaker input connector. |
-| 8 | `routes/stream_internal/mic_to_stt.py` | Bridge microphone output through the internal `mic-to-stt-audio` pipe into STT. |
-| 9 | `routes/stream_internal/stt_to_tts.py` | Bridge STT text output through the internal `stt-to-tts-text` pipe into TTS. |
-| 10 | `routes/stream_internal/tts_to_speaker.py` | Bridge TTS audio output through the internal `tts-to-speaker-audio` pipe into speaker. |
+| 1 | `steps/health_check.py` | Check all required integrations. |
+| 2 | `steps/get_mic_stream.py` | Open the microphone stream. |
+| 3 | `steps/set_stt_stream.py` | Start STT SET from the STT input connector. |
+| 4 | `steps/get_stt_stream.py` | Open STT GET for text output. |
+| 5 | `steps/set_tts_stream.py` | Start TTS SET from the TTS input connector. |
+| 6 | `steps/get_tts_stream.py` | Open TTS GET for audio output. |
+| 7 | `steps/set_speaker_stream.py` | Start speaker playback from the speaker input connector. |
+| 8 | `bridges/mic_to_stt.py` | Bridge microphone output through the internal `mic-to-stt-audio` pipe into STT. |
+| 9 | `bridges/stt_to_tts.py` | Bridge STT text output through the internal `stt-to-tts-text` pipe into TTS. |
+| 10 | `bridges/tts_to_speaker.py` | Bridge TTS audio output through the internal `tts-to-speaker-audio` pipe into speaker. |
 
 
-Cross-route state moves through `VoicePipelineContext`; routes do not call each other directly. Internal bridge routes own the source stream, destination stream, and `AsyncStreamPipe` for each boundary: mic-to-STT audio, STT-to-TTS text, and TTS-to-speaker audio. Each internal pipe carries standard stream events, and each `completed` event includes the full text or audio output.
+Cross-step state moves through `VoicePipelineContext`; steps and bridges do not call each other directly. The bridges own the source stream, destination stream, and `AsyncStreamPipe` for each boundary: mic-to-STT audio, STT-to-TTS text, and TTS-to-speaker audio. Each internal pipe carries standard stream events, and each `completed` event includes the full text or audio output.
 
 The pipeline is started in the background during service startup. `POST /voice/pipeline` starts a new instance as a background task and returns `{"started": true}` immediately.
 
@@ -338,7 +338,7 @@ Collect the whole suite:
 Current collection:
 
 ```text
-76 tests collected
+374 tests collected
 ```
 
 Run live tests against real configured microservices:
@@ -356,20 +356,20 @@ Live tests are skipped by default unless `RUN_LIVE_MICROSERVICE_TESTS=1` is set.
 | --- | --- |
 | `main.py` | Program entry point. |
 | `composition_root/` | Config loading, dependency wiring, startup preflight, and server setup. |
-| `application/services/service.py` | Public `BrainService` facade for health, STT, TTS, transcription, and pipeline use cases. |
-| `application/services/pipeline.py` | Full voice pipeline executor. |
-| `application/services/routes/` | Isolated pipeline routes. |
-| `application/ports/` | Application port interfaces. |
-| `application/dtos/` | Inbound, service, and outbound DTOs plus mappers. |
+| `application/services/brain_service.py` | Public `BrainService` facade; each use case lives in `health_service`, `transcription_service`, `playback_service`, `agent_service`. |
+| `application/services/voice_pipeline/` | Full voice pipeline executor (`pipeline.py`), its `steps/` and `bridges/`. |
+| `application/services/streams/` | Async stream pipes, the counted text stream and the `contracts.stream` helpers. |
+| `application/ports/` | `inbound/` (what the HTTP adapter calls) and `outbound/` (one port per external service). |
+| `application/dtos/` | Inbound, service, and outbound DTOs plus the mappers to and from the domain. |
 | `infrastructure/inbound/http/` | FastAPI adapter and route registration. |
 | `infrastructure/outbound/http/` | HTTP adapters for external microservices. |
-| `domain/` | Shared models and errors (logging: shared `shared_logging` package). |
-| `docs/` | External microservice contract notes. |
+| `domain/` | Business rules: `value_objects/`, `entities/`, `operations/` and the errors (standard library only). |
+| `docs/` | `ARCHITECTURE.md` (layers, tree, rules), `brain_restructure_plan.md` and its task tracker, external microservice contract notes. |
 | `tests/mock/` | Fake-backed and `httpx.MockTransport` tests. |
 | `tests/live/` | Opt-in tests against real microservices. |
 | `tests/shared/` | Shared fakes, streams, and live service wiring for tests. |
 
-More detailed flow notes live in `application/services/FLOW_INDEX.md` and the `tests/**/README.md` files.
+More detailed notes live in `docs/ARCHITECTURE.md` and the `tests/**/README.md` files.
 
 ## 12. Assumptions
 

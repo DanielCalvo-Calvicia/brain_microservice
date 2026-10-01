@@ -1,7 +1,7 @@
 import asyncio
 
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
-from application.services.service import BrainService
+from application.services.brain_service import BrainService
 from shared_logging import get_logger
 
 logger = get_logger(__name__)

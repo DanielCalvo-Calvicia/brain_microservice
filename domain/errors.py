@@ -10,7 +10,10 @@ class ExternalServiceError(BrainMicroserviceError):
 
 
 class ExternalServiceUnavailableError(ExternalServiceError):
-    pass
+    @classmethod
+    def from_stream_error(cls, service_name: str, code: str, message: str) -> "ExternalServiceUnavailableError":
+        """The error for a stream `error` event a service sent: `code: message`."""
+        return cls(service_name, f"{code}: {message}")
 
 
 class ExternalServiceAuthenticationError(ExternalServiceError):

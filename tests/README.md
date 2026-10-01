@@ -35,10 +35,10 @@ Run everything VS Code discovers:
 python -m pytest tests/mock tests/live
 ```
 
-Run one mock category:
+Run one layer of the mock tests:
 
 ```powershell
-python -m pytest tests/mock/external_microservices
+python -m pytest tests/mock/infrastructure/outbound_http
 ```
 
 Run one live service:

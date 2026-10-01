@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from application.dtos.outbound_dtos import MotorDirectiveDto
-from domain.models import ServiceStatus
+from domain.value_objects.service_status import ServiceStatus
 
 
 @dataclass(frozen=True, slots=True)
