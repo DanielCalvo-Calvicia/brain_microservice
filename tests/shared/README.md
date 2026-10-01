@@ -39,6 +39,14 @@ contain pytest test cases.
 - `SERVICE_NAMES`
   canonical service ordering used by health-flow tests.
 
+## `stream_probes.py`
+
+- `finite_silence_audio_stream(sample_rate, seconds)` yields silent PCM for the live tests; `read_one_chunk(name, byte_stream, timeout_seconds)` waits for one chunk of a stream (moved out of application code in the 2026-10-01 restructure).
+
+## `wire.py`
+
+- `stream_event_bytes(event_type, sequence, payload)` builds the raw bytes of one stream event. It is deliberately hand-written JSON, not built with the contracts codec, so tests prove a consumer accepts what the contract says is on the wire.
+
 ## `live_microservices.py`
 
 - `LiveMicroservices`

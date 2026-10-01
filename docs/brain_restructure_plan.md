@@ -280,3 +280,4 @@ microservices); the e2e tests use real processes with fake hardware and a script
 - Verification: four mutation checks (dialogue routing, direction flip, directives of failed flows, default flow order) each fail the
   expected tests; the sha256 diff against the snapshot (163 added, 63 removed, 32 changed) is fully accounted for.
 - Not pushed: all of it is local; the baseline commit is `5542919` and everything after it is uncommitted.
+- **Addendum 2026-10-01 (documentation pass):** the restructure was committed afterwards as `1c4bde9` on `feature_ai_claude_2` (pushed: the branch is in sync with `origin/feature_ai_claude_2`); the line above describes the state when the work finished. Current Brain test result: `360 passed, 14 skipped`.

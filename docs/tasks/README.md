@@ -1,3 +1,5 @@
+> **Finished (banner added 2026-10-01).** All 33 subtasks below are DONE and the work is committed (`1c4bde9`). This tracker is kept as history: the statements about uncommitted files and the snapshot baseline describe the state when the work started. The current layout is in `../ARCHITECTURE.md`.
+
 # Brain restructure: task tracker
 
 Follows `docs/brain_restructure_plan.md` (the why and the target tree). This folder is the *how, step by step*, built so the work can be

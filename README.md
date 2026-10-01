@@ -1,382 +1,209 @@
 # Brain Microservice
 
-Master/orchestrator service for connecting external microphone, STT, TTS, and speaker microservices through HTTP streams.
+The master/orchestrator of OBLIVION (port `7999`). It is the **only coordinator**: it opens one HTTP stream per hop and bridges microphone -> STT -> ai-agent -> TTS -> speaker, and sends movement decisions to the stepper. The other services never call each other. Brain does no audio work itself.
 
-The brain service does not capture audio, transcribe speech, synthesize speech, or play audio itself. It coordinates the other services and owns the voice pipeline wiring.
+Reviewed against the code on 2026-10-01 (branch `feature_ai_claude_2`, after the layered restructure of that day). Layers, tree and where each rule lives: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Behaviour notes for the next session: `CLAUDE.md`.
 
 ## Index
 
-1. [What This Service Does](#1-what-this-service-does)
-2. [External Services](#2-external-services)
-3. [Architecture](#3-architecture)
-4. [HTTP API](#4-http-api)
-5. [Voice Pipeline](#5-voice-pipeline)
-6. [Startup Flow](#6-startup-flow)
-7. [Configuration](#7-configuration)
-8. [Runtime Environments And Logs](#8-runtime-environments-and-logs)
-9. [Run The Service](#9-run-the-service)
-10. [Run Tests](#10-run-tests)
-11. [Repository Map](#11-repository-map)
-12. [Assumptions](#12-assumptions)
+1. [What it does](#1-what-it-does) 2. [External services](#2-external-services) 3. [Architecture](#3-architecture) 4. [HTTP API](#4-http-api) 5. [Voice pipeline](#5-voice-pipeline) 6. [Startup flow](#6-startup-flow) 7. [Configuration](#7-configuration) 8. [Environment and logs](#8-environment-and-logs) 9. [Run](#9-run) 10. [Tests](#10-tests) 11. [Repository map](#11-repository-map) 12. [Assumptions and what was never verified](#12-assumptions-and-what-was-never-verified)
 
-## 1. What This Service Does
-
-The service sits between an inbound HTTP API and four outbound HTTP integrations:
+## 1. What it does
 
 ```text
-Inbound HTTP adapter -> BrainService -> outbound HTTP adapters -> external microservices
+Inbound HTTP adapter -> BrainService (facade) -> use-case services -> outbound ports -> HTTP adapters -> external microservices
 ```
 
-It supports:
-
-- integration health checks;
+- integration health checks (microphone, STT, TTS, speaker);
 - raw audio batch transcription through STT;
 - microphone stream transcription through STT;
 - text playback through TTS and speaker;
-- full microphone -> STT -> TTS -> speaker voice pipeline.
+- the full voice pipeline microphone -> STT -> ai-agent -> TTS -> speaker, started at service startup and kept running;
+- for every utterance, a decision by ai-agent's flows (reply, then movements), with movements sent to the stepper.
 
-The application layer depends on ports/interfaces. FastAPI, `httpx`, URLs, and HTTP status handling stay in the infrastructure and composition layers.
+## 2. External services
 
-## 2. External Services
+Hosts and ports come from environment variables (section 7). The "default" column is what the code uses when nothing is set.
 
-| Service | Default URL | Main Purpose |
-| --- | --- | --- |
-| Microphone | `http://127.0.0.1:8000` | Starts, stops, and exposes microphone audio streams. |
-| STT | `http://127.0.0.1:8001` | Converts audio streams or audio bytes into text. |
-| TTS | `http://127.0.0.1:8002` | Converts text into audio streams. |
-| Speaker | `http://127.0.0.1:8003` | Plays audio streams. |
-| ai-agent | `http://127.0.0.1:7998` | Decides what to do with transcribed text. Several flows, each with its own routes `/<flow>/session/...` and its own session, asked one after the other in the order of `AI_AGENT_FLOWS` (default conversation-flow, then motion-flow): conversation-flow writes the reply, motion-flow decides the arm movements (`AgentFlowPort` with one adapter per flow). Called once per utterance; never exercised against a real ai-agent process (verified with fakes/mocks only). |
-| stepper | `http://127.0.0.1:8005` | Moves the arms (`StepperPort`/`HttpStepperAdapter`). Only Brain may call it; never exercised against real hardware. |
+| Service | Variable | Code default | Purpose |
+| --- | --- | --- | --- |
+| Microphone | `MICROPHONE_BASE_URL` | `http://127.0.0.1:8000` | Starts, stops and exposes the microphone stream |
+| STT | `STT_BASE_URL` | `http://127.0.0.1:8001` | Audio to text |
+| TTS | `TTS_BASE_URL` | `http://127.0.0.1:8002` | Text to audio |
+| Speaker | `SPEAKER_BASE_URL` | `http://127.0.0.1:8003` | Plays audio |
+| ai-agent | `AI_AGENT_BASE_URL` | `http://127.0.0.1:7998` | Decides what to say and do. Hosts several flows, each with its own routes `/<flow>/session/...` and its own session; Brain asks them one after the other in the order of `AI_AGENT_FLOWS` (default `conversation-flow,motion-flow`) |
+| stepper | `STEPPER_BASE_URL` | `http://127.0.0.1:8005` | Moves the arms. Only Brain may call it |
+
+Only microphone, STT, TTS and speaker are checked by `/integrations/health` and the startup preflight. ai-agent and stepper are optional at startup: without ai-agent Brain speaks a fixed apology, without the stepper the arms simply do not move.
 
 ## 3. Architecture
 
-Main runtime path:
-
 ```text
-main.py
-  -> composition_root.setup.setup()
-  -> composition_root.config.load_config()
-  -> composition_root.dependencies.brain_dependency
-  -> application.services.service.BrainService
-  -> infrastructure.inbound.http.fastapi_adapter.FastApiAdapter
-  -> uvicorn
+main.py -> composition_root.setup.setup() -> config.load_config() -> dependencies.brain_dependency
+        -> application.services.brain_service.BrainService -> infrastructure.inbound.http.fastapi_adapter.FastApiAdapter -> uvicorn
 ```
-
-Dependency wiring:
 
 ```text
 FastApiAdapter
-  -> BrainService
-      -> VoicePipelineFlow
+  -> BrainService (facade over HealthService, TranscriptionService, PlaybackService, AgentService, VoicePipelineFlow)
       -> MicrophonePort -> HttpMicrophoneAdapter
-      -> STTPort       -> HttpSTTAdapter
-      -> TTSPort       -> HttpTTSAdapter
-      -> SpeakerPort   -> HttpSpeakerAdapter
-      -> AgentFlowPort -> HttpConversationFlowAdapter, HttpMotionFlowAdapter, ...   (ai-agent's flows, one after the other, via `decide()`)
-      -> StepperPort   -> HttpStepperAdapter   (called from the STT-to-TTS route on a movement decision; see below)
+      -> STTPort        -> HttpSTTAdapter
+      -> TTSPort        -> HttpTTSAdapter
+      -> SpeakerPort    -> HttpSpeakerAdapter
+      -> AgentFlowPort  -> HttpConversationFlowAdapter, HttpMotionFlowAdapter   (ai-agent's flows, via decide())
+      -> StepperPort    -> HttpStepperAdapter                                   (via move_arms())
 ```
 
-Since 2026-09-22, `application/services/voice_pipeline/bridges/stt_to_tts.py` calls ai-agent instead of echoing STT text straight to TTS. Since 2026-09-29 it decides **once per STT `completed` event** (STT's own silence detection marks each utterance boundary), not once per pipeline run, and keeps listening for the next utterance for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). `max_text_segments` (0 = unlimited) only caps how many of those decisions get made, for bounded/test runs; production leaves it at 0. Only ai-agent's words — never the raw STT text — reach TTS.
+Every business rule lives in `domain/` (standard library only): the flow chain, degrees to rotation, format checks, text splitting, health rules. Layer rules are enforced by `tests/mock/test_layout.py`.
 
-**What the user hears while ai-agent works** (`application/services/progress.py`): as soon as an utterance arrives Brain says `message received` (`PROGRESS_RECEIVED_MESSAGE`); while ai-agent's flows run Brain says `thinking` (`PROGRESS_THINKING_MESSAGE`) every 2 seconds (`PROGRESS_THINKING_INTERVAL_SECONDS`; the first one after one interval, so a quick answer stays quiet); only when **all** the flows have ended does it say the answer and send the movements to the stepper. The flows are asked **one after the other, in order, each only when the one before has ended** (`BrainService.decide()`): conversation-flow writes the reply and motion-flow, last, decides the movements. What each flow says is spoken in order (for example the reply, then motion-flow's refusal or question). A flow that asks the user a question (`awaiting_user_input`) stops the chain, and the next utterance, which is the answer, goes only to that flow. A flow that cannot be reached is skipped (an accepted movement is never cancelled because another flow was down); if none can be reached Brain speaks a fixed apology. Each flow keeps its own session, opened at startup on a best-effort basis (its failure never stops Brain from starting) or lazily, with one automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only).
+**Deciding for an utterance.** The STT-to-TTS bridge (`application/services/voice_pipeline/bridges/stt_to_tts.py`) decides **once per STT `completed` event** (STT's own silence detection marks utterance boundaries) and keeps listening for the next one for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). Per utterance `BrainService.decide()` asks the flows **one after the other, each only when the one before has ended**: conversation-flow writes the reply, motion-flow, last, decides the movements. What each flow says is spoken in order. A flow that asks the user a question (`awaiting_user_input`) stops the chain, and the next utterance, its answer, goes only to that flow. A flow that cannot be reached is skipped; if none can be reached Brain speaks a fixed apology. Only ai-agent's words, never the raw STT text, reach TTS. `max_text_segments` (0 = unlimited) only caps how many decisions a run makes (bounded runs and tests).
 
-When the decision includes movements (a sequence, in order; `degrees` is signed, so left 90 then left -90 returns the arm), `BrainService.move_arms()` is dispatched as an independent, fire-and-forget `asyncio.create_task` — deliberately **not** `context.create_task`/`VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires as soon as this run's TTS/speaker work finishes, which can be faster than a real HTTP round trip to stepper; a move tied to that would get cancelled in the normal, successful case, not just on shutdown. It never blocks or fails the spoken reply. ai-agent's `MotorDirectiveDto` only says `arm: "left"|"right"`, `degrees`, `direction` — it has no idea what stepper's own `stepper_id`s are (that's stepper's own `STEPPER_CONFIGS`), so `HttpStepperAdapter` is the one place that maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full revolutions (stepper only reads the size of `rotations`, so a negative number of degrees is sent as the same rotation in the opposite direction), and applies a fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). `move_arm()` never raises on a failed or refused move — it returns `StepperMoveResponseDto(success=False, ...)` instead, since the caller already has ai-agent's spoken reply regardless of whether the physical move succeeds. `move_arms()` runs a sequence one movement after the other and stops at the first one that fails: going on would leave the arm somewhere the sequence did not intend.
+**What the user hears while ai-agent works** (`application/services/progress.py`): `message received` at once when an utterance arrives (`PROGRESS_RECEIVED_MESSAGE`), `thinking` every `PROGRESS_THINKING_INTERVAL_SECONDS` while the flows run (the first after one interval, so a quick answer stays quiet), and only when all flows have ended the answer and the movements.
 
-**This has never been exercised against a real ai-agent process or real stepper hardware** — only `contracts/tests/e2e` (real STT/TTS/speaker processes, fake ai-agent/stepper) and Brain's own mocked test suite.
+**Sessions.** Each flow has its own `AgentFlowSession`, opened at startup best-effort (its failure never stops Brain), otherwise lazily, and re-established once on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only).
+
+**Movements.** `BrainService.move_arms()` runs the movements of the flows that succeeded in order (`degrees` is signed: left 90 then left -90 returns the arm) and stops at the first failure. It is dispatched as a plain fire-and-forget `asyncio.create_task`, deliberately **not** tied to `VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires when the TTS/speaker work finishes, which can be faster than the HTTP round trip to the stepper. `HttpStepperAdapter` maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full rotations (a negative number is sent as the same rotation in the opposite direction, because the stepper only reads the size of `rotations`) and uses the fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). A failed or refused move is returned as `StepperMoveResponseDto(success=False, ...)`, never raised; it never blocks or fails the spoken reply.
 
 ## 4. HTTP API
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Checks that the brain service is alive. |
-| `GET` | `/integrations/health` | Checks microphone, STT, TTS, and speaker availability. |
-| `POST` | `/stt/batch` | Sends raw audio bytes to STT batch transcription. |
-| `POST` | `/tts/play` | Sends UTF-8 text to TTS and plays the resulting audio through speaker. |
-| `POST` | `/voice/transcribe` | Starts microphone, sends mic stream to STT, and returns text segments. |
-| `POST` | `/voice/pipeline` | Runs microphone -> STT -> TTS -> speaker. |
+| `GET` | `/health` | Brain is alive |
+| `GET` | `/integrations/health` | Microphone, STT, TTS, speaker availability: `data = {all_available, services: [{name, is_available, detail}]}` |
+| `POST` | `/stt/batch?sample_rate=16000` | Body: raw PCM; returns `{text}` |
+| `POST` | `/tts/play?sample_rate=24000&channels=1` | Body: UTF-8 text; synthesizes and plays it; returns `{success}` |
+| `POST` | `/voice/transcribe` | Query `sample_rate` (16000), `chunk_size` (1024), `silence_threshold` (150), `silence_limit_seconds` (2.0), `max_segments` (1); returns `{segments}` |
+| `POST` | `/voice/pipeline` | Query `microphone_sample_rate` (16000), `microphone_chunk_size` (1024), `stt_silence_threshold` (150), `stt_silence_limit_seconds` (2.0), `max_text_segments` (0), `tts_sample_rate` (24000), `speaker_channels` (1). Starts a pipeline as a background task and returns `{"started": true}` at once |
 
-Example full pipeline call:
+Answers use the envelope `action / status / status_code / message / timestamp / data`; errors use `status: "error"` and `data: null`. Failures are `502` when an external service failed (`BrainMicroserviceError`) and `500` otherwise. Invalid pipeline settings fail before any stream opens (a `ValueError` naming the field, `500` on `/voice/pipeline`). There is no authentication.
 
-```powershell
-curl -X POST "http://127.0.0.1:7999/voice/pipeline"
-```
+### Stream contract
 
-Example response shape:
-
-```json
-{
-  "action": "voice_pipeline",
-  "status": "success",
-  "status_code": 200,
-  "message": "Voice pipeline started",
-  "timestamp": 0,
-  "data": {
-    "started": true
-  }
-}
-```
-
-The pipeline runs as a background task after this response. All streams stay active until the service shuts down.
-
-Errors use the same envelope with `status: "error"` and `data: null`.
-
-### HTTP Stream Contract
-
-Every HTTP stream consumed or produced by the outbound adapters uses the standard stream event JSON shape. Brain writes streaming request bodies as NDJSON (`Content-Type: application/x-ndjson`) and parses streaming responses as NDJSON, except STT text output, which remains SSE-compatible because the existing STT service exposes `text/event-stream`.
-
-Standard event:
-
-```json
-{
-  "type": "stream_started",
-  "sequence": 1,
-  "timestamp": "2026-05-24T12:00:00Z",
-  "payload": {}
-}
-```
-
-Rules enforced by Brain adapters:
-
-- each stream starts with `stream_started` at `sequence: 1`;
-- `sequence` increments by 1 per event;
-- `timestamp` must be UTC ISO-8601 ending in `Z`;
-- `payload` is always an object;
-- allowed `type` values are `stream_started`, `partial`, `completed`, `heartbeat`, and `error`;
-- binary/audio partials use `payload.bytes_base64`;
-- text partials use `payload.text`;
-- logical completion uses `payload.reason: "completed"` plus `payload.output` for text or `payload.output_bytes_base64` for audio;
-- raw text chunks, sentinel strings, `[DONE]`, `EOF`, and unstructured stream data are rejected.
-
-Wire formats:
+Every stream the adapters consume or produce is a `contracts.stream` event stream (`{type, sequence, timestamp, payload}`), encoded and decoded only through `contracts.stream.codec`; Brain never hand-writes event JSON. Request bodies are NDJSON (`Content-Type: application/x-ndjson`); responses are NDJSON, except STT's text output, which is SSE (`text/event-stream`). Each upload (`.../set`) ends with an `input_completed`/`completed` or an `error` event and Brain reads that outcome (the HTTP status alone is not the result). Rules and the full schemas: `contracts/contracts/stream/README.md`.
 
 | Endpoint direction | Wire format |
 | --- | --- |
-| Microphone `GET /stream`, `POST /start` response | NDJSON standard events |
-| STT `POST /process/stream/set` request | NDJSON standard events |
-| STT `GET /process/stream/get` response | SSE, with each `data:` value exactly one standard event JSON object |
-| TTS `POST /process/stream/set` request | NDJSON standard events |
-| TTS `GET /process/stream/get` response | NDJSON standard events |
-| Speaker `POST /process/stream/set` request | NDJSON standard events |
+| Microphone `GET /stream`, `POST /start` response | NDJSON events |
+| STT `POST /process/stream/set` request | NDJSON events |
+| STT `GET /process/stream/get` response | SSE, each `data:` one event |
+| TTS `POST /process/stream/set` request | NDJSON events |
+| TTS `GET /process/stream/get` response | NDJSON events |
+| Speaker `POST /process/stream/set` request | NDJSON events |
 
-## 5. Voice Pipeline
+## 5. Voice pipeline
 
-The full voice pipeline is implemented by `application/services/voice_pipeline/pipeline.py`, with one file per **step** (`steps/`: open or start one stream of one microservice) and per **bridge** (`bridges/`: copy one stream into the next through an internal pipe). See `docs/ARCHITECTURE.md`.
-
-`VoicePipelineFlow` runs all 10 steps and bridges once in order. The SET and GET streams are opened during setup, before the user speaks. The pipeline then waits for live streams to complete naturally, or stays alive when upstream streams stay open. On shutdown, background tasks are cancelled via `cancel_pending_tasks()`.
-
-Order:
+`application/services/voice_pipeline/pipeline.py` runs one file per **step** (`steps/`: open or start one stream of one microservice) and per **bridge** (`bridges/`: copy one stream into the next through an internal `AsyncStreamPipe`). Steps and bridges share state only through `VoicePipelineContext`.
 
 | Order | File | Responsibility |
 | --- | --- | --- |
-| 1 | `steps/health_check.py` | Check all required integrations. |
-| 2 | `steps/get_mic_stream.py` | Open the microphone stream. |
-| 3 | `steps/set_stt_stream.py` | Start STT SET from the STT input connector. |
-| 4 | `steps/get_stt_stream.py` | Open STT GET for text output. |
-| 5 | `steps/set_tts_stream.py` | Start TTS SET from the TTS input connector. |
-| 6 | `steps/get_tts_stream.py` | Open TTS GET for audio output. |
-| 7 | `steps/set_speaker_stream.py` | Start speaker playback from the speaker input connector. |
-| 8 | `bridges/mic_to_stt.py` | Bridge microphone output through the internal `mic-to-stt-audio` pipe into STT. |
-| 9 | `bridges/stt_to_tts.py` | Bridge STT text output through the internal `stt-to-tts-text` pipe into TTS. |
-| 10 | `bridges/tts_to_speaker.py` | Bridge TTS audio output through the internal `tts-to-speaker-audio` pipe into speaker. |
+| 1 | `steps/health_check.py` | Check all required integrations |
+| 2 | `steps/get_mic_stream.py` | Open the microphone stream |
+| 3 | `steps/set_stt_stream.py` | Start the STT upload from the STT input pipe |
+| 4 | `steps/get_stt_stream.py` | Open STT text output (retries briefly while it is not exposed yet) |
+| 5 | `steps/set_tts_stream.py` | Start the TTS upload from the TTS input pipe |
+| 6 | `steps/get_tts_stream.py` | Open TTS audio output |
+| 7 | `steps/set_speaker_stream.py` | Start speaker playback from the speaker input pipe |
+| 8 | `bridges/mic_to_stt.py` | Microphone audio into STT (checks the announced format) |
+| 9 | `bridges/stt_to_tts.py` | Per STT utterance: progress messages, `decide()`, the answer to TTS, movements to the stepper |
+| 10 | `bridges/tts_to_speaker.py` | TTS audio into the speaker (checks the announced format) |
 
+The SET and GET streams are opened during setup, before anyone speaks. The pipeline then waits for the live streams to end, or stays alive while upstream streams stay open. On shutdown background tasks are cancelled via `cancel_pending_tasks()`. It is started in the background at startup; `POST /voice/pipeline` starts another instance.
 
-Cross-step state moves through `VoicePipelineContext`; steps and bridges do not call each other directly. The bridges own the source stream, destination stream, and `AsyncStreamPipe` for each boundary: mic-to-STT audio, STT-to-TTS text, and TTS-to-speaker audio. Each internal pipe carries standard stream events, and each `completed` event includes the full text or audio output.
+## 6. Startup flow
 
-The pipeline is started in the background during service startup. `POST /voice/pipeline` starts a new instance as a background task and returns `{"started": true}` immediately.
-
-## 6. Startup Flow
-
-When `main.py` runs:
-
-1. VS Code launch profile environment is applied when available.
-2. Local `.env` is loaded for non-VS Code runs when no launch profile was selected.
-3. Runtime config is parsed.
-4. Logger is configured for the selected environment.
-5. Outbound HTTP adapters are created.
-6. Startup preflight polls external service health until ready or timeout.
+1. The selected VS Code launch profile's environment is applied when available (`.vscode/launch.json`).
+2. A local `.env` is loaded when no launch profile was selected.
+3. Config is parsed (`composition_root/config.py`), logging is initialised (`init_logging("brain", environment=...)`).
+4. Outbound HTTP adapters are created.
+5. **Startup preflight** polls microphone, STT, TTS and speaker health until all are ready, or the timeout expires (Brain then exits with `StartupPreflightError`).
+6. A session per ai-agent flow is attempted (best-effort).
 7. The mandatory startup voice pipeline starts in the background.
-8. FastAPI routes are registered.
-9. Uvicorn serves the inbound API.
-10. Shutdown cancels background tasks, stops microphone through its API, and closes HTTP clients.
-
-Startup preflight is controlled by:
-
-```env
-STARTUP_PREFLIGHT_ENABLED=true
-STARTUP_PREFLIGHT_TIMEOUT_SECONDS=60
-MICROSERVICE_READY_POLL_INTERVAL_SECONDS=2
-```
+8. FastAPI routes are registered and uvicorn serves.
+9. Shutdown cancels the background tasks, stops the microphone through its API, ends the agent sessions and closes the HTTP clients.
 
 ## 7. Configuration
 
-Configuration comes from process environment, the selected VS Code launch profile, and `.env` fallback.
+Environment variables (process environment, then the selected VS Code launch profile, then `.env`). `.env.example` has every variable below with the same values; the code defaults are those of `composition_root/config.py`. Endpoint values may be paths or full URLs; a full URL on the configured service origin is normalised to a path. `STEPPER_ROTATE_ENDPOINT_TEMPLATE` is a path template, not normalised.
 
-Copy `.env.example` to `.env` for local command-line runs:
+| Variable | Default | Purpose |
+|---|---|---|
+| `APP_ENV` (or `VSCODE_ENV`) | `development` | `development`, `staging` or `production` (`debug` -> development, `dev` -> development, `prod` -> production). Only fills the `environment` field of the logs |
+| `VSCODE_LAUNCH_PROFILE` | *(empty)* | Selects a profile of `.vscode/launch.json` (listed in `.env.example`) |
+| `SERVICE_HOST` | `127.0.0.1` | Bind address |
+| `SERVICE_PORT` | `7999` | Bind port |
+| `PROVIDER_NAME` | `local` | Label logged at startup |
+| `PROVIDER_TIMEOUT_SECONDS` | `30` | Timeout of the outbound HTTP clients |
+| `MICROPHONE_BASE_URL` | `http://127.0.0.1:8000` | Microphone origin |
+| `MICROPHONE_STREAM_ENDPOINT` / `_START_ENDPOINT` / `_STOP_ENDPOINT` | `/stream` / `/start` / `/stop` | Microphone routes |
+| `STT_BASE_URL` | `http://127.0.0.1:8001` | STT origin |
+| `STT_SET_STREAM_ENDPOINT` / `STT_GET_STREAM_ENDPOINT` / `STT_BATCH_ENDPOINT` | `/process/stream/set` / `/process/stream/get` / `/process/batch` | STT routes |
+| `TTS_BASE_URL` | `http://127.0.0.1:8002` | TTS origin |
+| `TTS_SET_STREAM_ENDPOINT` / `TTS_STREAM_ENDPOINT` | `/process/stream/set` / `/process/stream/get` | TTS routes |
+| `SPEAKER_BASE_URL` | `http://127.0.0.1:8003` | Speaker origin |
+| `SPEAKER_PLAY_STREAM_ENDPOINT` | `/process/stream/set` | Speaker route. `SPEAKER_STREAM_ENDPOINT` (empty in `.env.example`) is a deprecated fallback used only when this one is unset |
+| `AI_AGENT_BASE_URL` | `http://127.0.0.1:7998` | ai-agent origin |
+| `AI_AGENT_FLOWS` | `conversation-flow,motion-flow` | Flows of ai-agent to run, in order; their routes are `/<flow>/session/...`. Known flows: those two (a new one needs its adapter in Brain) |
+| `PROGRESS_RECEIVED_MESSAGE` | `Message received.` | Said at once when an utterance arrives (empty = silence) |
+| `PROGRESS_THINKING_MESSAGE` | `Thinking.` | Said while the flows run (empty = silence) |
+| `PROGRESS_THINKING_INTERVAL_SECONDS` | `2` | Interval of the thinking message (`0` = off) |
+| `STEPPER_BASE_URL` | `http://127.0.0.1:8005` | stepper origin |
+| `STEPPER_ROTATE_ENDPOINT_TEMPLATE` | `/control/{stepper_id}/rotate` | Rotate route with a `{stepper_id}` placeholder |
+| `STEPPER_LEFT_ARM_STEPPER_ID` / `STEPPER_RIGHT_ARM_STEPPER_ID` | `stepper_1` / `stepper_2` | Which stepper id is the left/right arm |
+| `STEPPER_DEFAULT_RPM` | `15` | Speed of every movement (a directive carries none) |
+| `STARTUP_PREFLIGHT_ENABLED` | `true` | Wait for the services at startup |
+| `STARTUP_PREFLIGHT_TIMEOUT_SECONDS` | `60` | Preflight timeout |
+| `MICROSERVICE_READY_POLL_INTERVAL_SECONDS` | `2` | Preflight poll interval |
+| `RUN_LIVE_MICROSERVICE_TESTS` | `0` | Test-only switch: `1` runs `tests/live` |
 
-```powershell
-Copy-Item .env.example .env
-```
+`LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT`, `SERVICE_NAME` and `TRACE_EXPORT_*` are read by the shared logging package, not by Brain's config: see [`shared-logging/docs/logging.md`](../shared-logging/docs/logging.md). The `127.0.0.1` defaults only suit a single machine: on a multi-machine layout set every `*_BASE_URL` explicitly (the `deployment` tool does this from `robot.toml`).
 
-Important defaults:
+## 8. Environment and logs
 
-```env
-APP_ENV=development
-SERVICE_HOST=127.0.0.1
-SERVICE_PORT=7999
+Logging is the shared `shared_logging` package (JSON lines with `trace_id`, `service`, `environment`); the level comes from `LOG_LEVEL` (default `INFO`). `APP_ENV` no longer changes log levels: it only fills the `environment` field. Environment resolution is in `composition_root/environment.py`: `APP_ENV`, then `VSCODE_ENV`, else `development`; the launch profiles in `.vscode/launch.json` (`Python: Debug (development env)`, `Python: Run (staging env)`, `Python: Run (production env)`, plus three pytest/test profiles) can set them.
 
-PROVIDER_NAME=local
-PROVIDER_TIMEOUT_SECONDS=30
-PROVIDER_API_KEY=
-
-MICROPHONE_BASE_URL=http://127.0.0.1:8000
-MICROPHONE_STREAM_ENDPOINT=/stream
-MICROPHONE_START_ENDPOINT=/start
-MICROPHONE_STOP_ENDPOINT=/stop
-
-STT_BASE_URL=http://127.0.0.1:8001
-STT_SET_STREAM_ENDPOINT=/process/stream/set
-STT_GET_STREAM_ENDPOINT=/process/stream/get
-STT_BATCH_ENDPOINT=/process/batch
-
-TTS_BASE_URL=http://127.0.0.1:8002
-TTS_SET_STREAM_ENDPOINT=/process/stream/set
-TTS_STREAM_ENDPOINT=/process/stream/get
-
-SPEAKER_BASE_URL=http://127.0.0.1:8003
-SPEAKER_PLAY_STREAM_ENDPOINT=/process/stream/set
-
-# ai-agent hosts several flows with their own routes /<flow>/session/...; Brain asks them one after the other, in this order.
-AI_AGENT_BASE_URL=http://127.0.0.1:7998
-AI_AGENT_FLOWS=conversation-flow,motion-flow
-# What Brain says while they work (an empty text says nothing; an interval of 0 turns the thinking messages off).
-PROGRESS_RECEIVED_MESSAGE=Message received.
-PROGRESS_THINKING_MESSAGE=Thinking.
-PROGRESS_THINKING_INTERVAL_SECONDS=2
-
-# Not called by the live voice pipeline yet (planned). ai-agent only says "left"/"right"; these
-# map that to the stepper_id stepper itself is configured with (its own STEPPER_CONFIGS).
-STEPPER_BASE_URL=http://127.0.0.1:8005
-STEPPER_ROTATE_ENDPOINT_TEMPLATE=/control/{stepper_id}/rotate
-STEPPER_LEFT_ARM_STEPPER_ID=stepper_1
-STEPPER_RIGHT_ARM_STEPPER_ID=stepper_2
-STEPPER_DEFAULT_RPM=15
-
-STARTUP_PREFLIGHT_ENABLED=true
-STARTUP_PREFLIGHT_TIMEOUT_SECONDS=60
-MICROSERVICE_READY_POLL_INTERVAL_SECONDS=2
-```
-
-Endpoint values can be paths or full URLs. Full URLs that match the configured service origin are normalized to paths. `STEPPER_ROTATE_ENDPOINT_TEMPLATE` is a path template with a `{stepper_id}` placeholder, not a fixed endpoint, so it is not normalized this way.
-
-## 8. Runtime Environments And Logs
-
-The VS Code launch profiles in `.vscode/launch.json` can select the runtime environment:
-
-| Launch profile | Environment |
-| --- | --- |
-| `Python: Debug (development env)` | `development` |
-| `Python: Run (staging env)` | `staging` |
-| `Python: Run (production env)` | `production` |
-
-Environment resolution is centralized in `composition_root/environment.py`.
-
-Precedence:
-
-1. Process environment variables already present in the OS or inherited by Python.
-2. Selected VS Code launch profile `env`.
-3. Selected VS Code launch profile `envFile`.
-4. Safe fallback: `development`.
-
-`APP_ENV` is the primary environment variable. `VSCODE_ENV` is accepted as a fallback. The legacy value `debug` is treated as `development`.
-
-Application log filtering:
-
-| Environment | Application log levels shown |
-| --- | --- |
-| `development` | `trace`, `info`, `warn`, `error`, `critical` |
-| `staging` | `warn`, `error`, `critical` |
-| `production` | `critical` |
-
-FastAPI and Uvicorn logs are not filtered by the project logger.
-
-## 9. Run The Service
-
-Install dependencies if needed:
+## 9. Run
 
 ```powershell
 & windows\Scripts\python.exe -m pip install -r requirements.windows.txt
+& windows\Scripts\python.exe main.py        # start microphone, STT, TTS and speaker first (the preflight waits for them)
 ```
 
-Start the external microphone, STT, TTS, and speaker services first. Then run:
+Checks (replace host and port with `SERVICE_HOST`/`SERVICE_PORT`):
 
 ```powershell
-& windows\Scripts\python.exe main.py
+curl "http://<brain-host>:7999/health"
+curl "http://<brain-host>:7999/integrations/health"
+curl -X POST "http://<brain-host>:7999/voice/pipeline"
 ```
 
-Useful checks:
+## 10. Tests
 
 ```powershell
-curl "http://127.0.0.1:7999/health"
-curl "http://127.0.0.1:7999/integrations/health"
-curl -X POST "http://127.0.0.1:7999/voice/pipeline"
+& windows\Scripts\python.exe -m pytest tests\mock        # no services needed
+& windows\Scripts\python.exe -m pytest                   # mock + live; live skipped unless RUN_LIVE_MICROSERVICE_TESTS=1
+& windows\Scripts\python.exe -m pytest ..\contracts\tests -q   # from the workspace root: contract tests + e2e with fake hardware
 ```
 
-## 10. Run Tests
+Result on 2026-10-01: `360 passed, 14 skipped` in 7.8 s (374 collected; the 14 skipped are the live tests). `contracts/tests` (including `test_brain_ai_agent_flows.py`, Brain's real composition root against a real ai-agent process with a scripted LLM): `57 passed, 20 skipped`. Live tests need real services and were not run. Each folder under `tests/` has a README.
 
-Run mock tests only. These do not require external services:
-
-```powershell
-& windows\Scripts\python.exe -m pytest -q tests\mock
-```
-
-Collect the whole suite:
-
-```powershell
-& windows\Scripts\python.exe -m pytest --collect-only -q
-```
-
-Current collection:
-
-```text
-374 tests collected
-```
-
-Run live tests against real configured microservices:
-
-```powershell
-$env:RUN_LIVE_MICROSERVICE_TESTS='1'
-& windows\Scripts\python.exe -m pytest -q tests\live
-```
-
-Live tests are skipped by default unless `RUN_LIVE_MICROSERVICE_TESTS=1` is set.
-
-## 11. Repository Map
+## 11. Repository map
 
 | Path | Purpose |
 | --- | --- |
-| `main.py` | Program entry point. |
-| `composition_root/` | Config loading, dependency wiring, startup preflight, and server setup. |
-| `application/services/brain_service.py` | Public `BrainService` facade; each use case lives in `health_service`, `transcription_service`, `playback_service`, `agent_service`. |
-| `application/services/voice_pipeline/` | Full voice pipeline executor (`pipeline.py`), its `steps/` and `bridges/`. |
-| `application/services/streams/` | Async stream pipes, the counted text stream and the `contracts.stream` helpers. |
-| `application/ports/` | `inbound/` (what the HTTP adapter calls) and `outbound/` (one port per external service). |
-| `application/dtos/` | Inbound, service, and outbound DTOs plus the mappers to and from the domain. |
-| `infrastructure/inbound/http/` | FastAPI adapter and route registration. |
-| `infrastructure/outbound/http/` | HTTP adapters for external microservices. |
-| `domain/` | Business rules: `value_objects/`, `entities/`, `operations/` and the errors (standard library only). |
-| `docs/` | `ARCHITECTURE.md` (layers, tree, rules), `brain_restructure_plan.md` and its task tracker, external microservice contract notes. |
-| `tests/mock/` | Fake-backed and `httpx.MockTransport` tests. |
-| `tests/live/` | Opt-in tests against real microservices. |
-| `tests/shared/` | Shared fakes, streams, and live service wiring for tests. |
+| `main.py` | Entry point |
+| `composition_root/` | `config.py`, `environment.py`, containers, dependency wiring, `setup/` (preflight, startup pipeline, server) |
+| `domain/` | Business rules: `value_objects/`, `entities/`, `operations/`, `errors.py` (standard library only) |
+| `application/services/` | `brain_service.py` facade over `health_service`, `transcription_service`, `playback_service`, `agent_service`; `agent_flow_session.py`, `progress.py`, `microphone_lifecycle.py`; `streams/`; `voice_pipeline/` (`pipeline.py`, `steps/`, `bridges/`, `context.py`, `verification.py`) |
+| `application/ports/` | `inbound/` (what the HTTP adapter calls) and `outbound/` (one port per external service) |
+| `application/dtos/` | Inbound, service and outbound DTOs plus the mappers to and from the domain |
+| `infrastructure/inbound/http/` | FastAPI adapter and routes |
+| `infrastructure/outbound/http/` | `http_client.py`, `byte_streams.py` and one adapter folder per service (`microphone`, `stt`, `tts`, `speaker`, `stepper`, `ai_agent`) |
+| `docs/` | `ARCHITECTURE.md` (current); `brain_restructure_plan.md` and `tasks/` (the finished restructure plan and its tracker, historical) |
+| `tests/mock/`, `tests/live/`, `tests/shared/` | Mirror-the-layers tests with fakes; opt-in tests against real services; shared fakes and wire helpers |
 
-More detailed notes live in `docs/ARCHITECTURE.md` and the `tests/**/README.md` files.
+## 12. Assumptions and what was never verified
 
-## 12. Assumptions
-
-- Microphone, STT, TTS, and speaker are external services running separately.
-- The brain service integrates with them over HTTP.
-- Raw audio streams are treated as PCM byte streams according to the external service docs.
-- STT streaming responses use SSE-style text events.
-- STT and TTS use decoupled set/get stream flows.
-- Speaker consumes the TTS audio stream through its configured playback endpoint.
-- The brain service stops the microphone through the microphone API during cleanup.
+- Microphone, STT, TTS, speaker (and optionally ai-agent and stepper) run separately and are reached over HTTP.
+- STT's text output is SSE; STT and TTS use decoupled set/get stream flows; the speaker consumes the TTS audio through its playback endpoint.
+- Brain stops the microphone through its API during cleanup.
+- **Never exercised against real hardware or live services in this documentation pass.** The ai-agent integration is verified with fakes and with `contracts/tests/e2e` (a real ai-agent process, scripted LLM); the real LLM, the real stepper and the full real pipeline (`contracts/tests/e2e/test_real_pipeline.py`, opt-in) were not run.
