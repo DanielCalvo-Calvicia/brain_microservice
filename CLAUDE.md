@@ -2,7 +2,7 @@
 
 Port **7999** (`SERVICE_PORT`). Python/FastAPI. The **orchestrator and only coordinator** of OBLIVION. Status: prototype. Read `README.md` for the API, config and behaviour, `docs/ARCHITECTURE.md` for the layers, the tree and where each rule lives, and `../CLAUDE.md` for workspace rules.
 
-Current state (2026-10-01): branch `feature_ai_claude_2` (tracks `origin/feature_ai_claude_2`, in sync), last commit `1c4bde9` "Restructure Brain: real domain layer, services split, voice_pipeline, mirrored tests". Uncommitted: only tracked `__pycache__/*.pyc` noise (the repo tracks bytecode; keep it out of commits) plus these docs. Tests: `360 passed, 14 skipped` (the 14 are live tests); `contracts/tests` `57 passed, 20 skipped`. Nothing ran against real services or hardware.
+Current state (2026-10-01): branch `feature_ai_claude_2` (tracks `origin/feature_ai_claude_2`, in sync), last feature commit `7e77086` "Bundle contracts 0.10.0; refresh README, CLAUDE.md and restructure docs" (pushed; the restructure itself is `1c4bde9`). Uncommitted: only tracked `__pycache__/*.pyc` noise (the repo tracks bytecode; keep it out of commits). Tests: `360 passed, 14 skipped` (the 14 are live tests); `contracts/tests` `58 passed, 20 skipped`. Nothing ran against real services or hardware.
 
 ## Role
 
