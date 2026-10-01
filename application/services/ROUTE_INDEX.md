@@ -4,7 +4,7 @@ This service is organized around the voice pipeline executor:
 
 1. `service.py`: public service facade.
 2. `pipeline.py`: voice pipeline executor.
-3. `steps/`: isolated voice pipeline steps.
+3. `routes/`: isolated voice pipeline routes.
 
 ## Voice Pipeline
 
@@ -13,8 +13,8 @@ Main file:
 
 The voice pipeline is the microphone -> STT -> TTS -> speaker flow.
 The service file is only the executor. It initializes `VoicePipelineContext`,
-then runs isolated steps in order. Steps do not call each other and do not know
-which step comes next. All cross-step state moves through the context.
+then runs isolated routes in order. Routes do not call each other and do not know
+which route comes next. All cross-route state moves through the context.
 
 Phase order:
 
@@ -24,18 +24,18 @@ Phase order:
 4. Open external SET streams.
 5. Merge external streams into internal streams.
 
-Step files:
+Route files:
 
-1. `steps/health_check/step1_health_check.py`
-2. `steps/stream_get/step2_get_mic_stream.py`
-3. `steps/stream_set/step3_set_stt_stream.py`
-4. `steps/stream_get/step4_get_stt_stream.py`
-5. `steps/stream_set/step5_set_tts_stream.py`
-6. `steps/stream_get/step6_get_tts_stream.py`
-7. `steps/stream_set/step7_set_speaker_stream.py`
-8. `steps/stream_internal/step8_mic_to_stt.py`
-9. `steps/stream_internal/step9_stt_to_tts.py`
-10. `steps/stream_internal/step10_tts_to_speaker.py`
+1. `routes/health_check/health_check.py`
+2. `routes/stream_get/get_mic_stream.py`
+3. `routes/stream_set/set_stt_stream.py`
+4. `routes/stream_get/get_stt_stream.py`
+5. `routes/stream_set/set_tts_stream.py`
+6. `routes/stream_get/get_tts_stream.py`
+7. `routes/stream_set/set_speaker_stream.py`
+8. `routes/stream_internal/mic_to_stt.py`
+9. `routes/stream_internal/stt_to_tts.py`
+10. `routes/stream_internal/tts_to_speaker.py`
 
 1. Check health availability. `health`
    - Calls microphone, STT, TTS, and speaker `check_health()`.

@@ -28,6 +28,9 @@ class AppConfig:
     ai_agent_start_session_endpoint: str
     ai_agent_message_endpoint: str
     ai_agent_end_session_endpoint: str
+    ai_agent_motion_start_session_endpoint: str
+    ai_agent_motion_message_endpoint: str
+    ai_agent_motion_end_session_endpoint: str
     stepper_base_url: str
     stepper_rotate_endpoint_template: str
     stepper_left_arm_stepper_id: str
@@ -97,20 +100,36 @@ def load_config() -> AppConfig:
             fallback_env_name="SPEAKER_STREAM_ENDPOINT",
         ),
         ai_agent_base_url=_base_url("AI_AGENT_BASE_URL", "http://127.0.0.1:7998"),
+        # ai-agent hosts two flows, each with its own routes: conversation-flow talks, motion-flow decides movements.
         ai_agent_start_session_endpoint=_endpoint(
             "AI_AGENT_START_SESSION_ENDPOINT",
-            "http://127.0.0.1:7998/session/start",
-            "/session/start",
+            "http://127.0.0.1:7998/conversation-flow/session/start",
+            "/conversation-flow/session/start",
         ),
         ai_agent_message_endpoint=_endpoint(
             "AI_AGENT_MESSAGE_ENDPOINT",
-            "http://127.0.0.1:7998/session/message",
-            "/session/message",
+            "http://127.0.0.1:7998/conversation-flow/session/message",
+            "/conversation-flow/session/message",
         ),
         ai_agent_end_session_endpoint=_endpoint(
             "AI_AGENT_END_SESSION_ENDPOINT",
-            "http://127.0.0.1:7998/session/end",
-            "/session/end",
+            "http://127.0.0.1:7998/conversation-flow/session/end",
+            "/conversation-flow/session/end",
+        ),
+        ai_agent_motion_start_session_endpoint=_endpoint(
+            "AI_AGENT_MOTION_START_SESSION_ENDPOINT",
+            "http://127.0.0.1:7998/motion-flow/session/start",
+            "/motion-flow/session/start",
+        ),
+        ai_agent_motion_message_endpoint=_endpoint(
+            "AI_AGENT_MOTION_MESSAGE_ENDPOINT",
+            "http://127.0.0.1:7998/motion-flow/session/message",
+            "/motion-flow/session/message",
+        ),
+        ai_agent_motion_end_session_endpoint=_endpoint(
+            "AI_AGENT_MOTION_END_SESSION_ENDPOINT",
+            "http://127.0.0.1:7998/motion-flow/session/end",
+            "/motion-flow/session/end",
         ),
         stepper_base_url=_base_url("STEPPER_BASE_URL", "http://127.0.0.1:8005"),
         # A path template, not a fixed endpoint: {stepper_id} is filled in per call, so this does

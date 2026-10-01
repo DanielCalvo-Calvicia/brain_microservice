@@ -53,11 +53,13 @@ async def test_outbound_calls_without_a_trace_send_no_trace_headers() -> None:
 def test_brain_http_app_continues_the_incoming_trace() -> None:
     core = SimpleNamespace(
         service=SimpleNamespace(),
+        ai_agent_session=SimpleNamespace(),
         microphone_adapter=None,
         stt_adapter=None,
         tts_adapter=None,
         speaker_adapter=None,
         ai_agent_adapter=None,
+        motion_agent_adapter=None,
         stepper_adapter=None,
     )
     app = generate_brain_dependency_from_core(core).adapter_inbound.get_app

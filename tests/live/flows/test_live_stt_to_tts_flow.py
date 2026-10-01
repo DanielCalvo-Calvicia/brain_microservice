@@ -4,7 +4,7 @@ import os
 import pytest
 
 from application.dtos.outbound_dtos import STTSetStreamRequestDto, STTTextStreamRequestDto, TTSTextStreamRequestDto
-from application.services.steps.stream_helpers import finite_silence_audio_stream
+from application.services.routes.stream_helpers import finite_silence_audio_stream
 from tests.shared.live_microservices import LiveMicroservices
 
 

@@ -9,14 +9,14 @@ from ..context import AsyncStreamPipe, VoicePipelineContext, verify_stt_input
 logger = get_logger(__name__)
 
 
-class Step3SetSTTStream:
+class SetSTTStream:
     def __init__(self, stt_port: STTPort) -> None:
         self.stt_port = stt_port
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
         microphone_output = context.require_microphone_output()
-        logger.info("pipeline step 3: setting STT input stream connector")
+        logger.info("pipeline route: setting STT input stream connector")
         stt_stream_in_pipe = AsyncStreamPipe[bytes]("stt-stream-in")
         context.stt_stream_in_pipe = stt_stream_in_pipe
         stt_input = STTSetStreamRequestDto(

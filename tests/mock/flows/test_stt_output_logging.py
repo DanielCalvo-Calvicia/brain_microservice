@@ -9,8 +9,8 @@ from application.dtos.outbound_dtos import (
 )
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
 from application.ports.outbound_ports import STTPort
-from application.services.steps.context import VoicePipelineContext
-from application.services.steps.stream_get.step4_get_stt_stream import Step4GetSTTStream
+from application.services.routes.context import VoicePipelineContext
+from application.services.routes.stream_get.get_stt_stream import GetSTTStream
 from tests.shared.wire import stream_event_bytes
 from tests.shared.streams import byte_stream
 
@@ -36,7 +36,7 @@ async def test_stt_output_stream_logs_each_full_text(capsys: pytest.CaptureFixtu
         audio_stream=byte_stream((b"placeholder",)),
     )
 
-    await Step4GetSTTStream(cast(STTPort, ImmediateSTTOutput())).run(context)
+    await GetSTTStream(cast(STTPort, ImmediateSTTOutput())).run(context)
     received = [chunk async for chunk in context.require_stt_output().text_stream]
 
     captured = capsys.readouterr()

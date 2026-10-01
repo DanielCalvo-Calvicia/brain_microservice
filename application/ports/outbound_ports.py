@@ -14,6 +14,8 @@ from application.dtos.outbound_dtos import (
     SpeakerPlaybackResponseDto,
     STTBatchRequestDto,
     STTBatchResponseDto,
+    MotionMessageRequestDto,
+    MotionMessageResponseDto,
     MotorDirectiveDto,
     STTSetStreamRequestDto,
     STTTextStreamRequestDto,
@@ -76,6 +78,20 @@ class AIAgentPort(HealthCheckPort, Protocol):
         ...
 
     async def message(self, request: AIAgentMessageRequestDto) -> AIAgentMessageResponseDto:
+        ...
+
+    async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
+        ...
+
+
+class MotionAgentPort(Protocol):
+    """motion-flow of ai-agent: turns what the user said into an ordered list of arm movements. It only
+    decides; Brain runs the movements. Same service as AIAgentPort, so its health is ai-agent's."""
+
+    async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
+        ...
+
+    async def message(self, request: MotionMessageRequestDto) -> MotionMessageResponseDto:
         ...
 
     async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:

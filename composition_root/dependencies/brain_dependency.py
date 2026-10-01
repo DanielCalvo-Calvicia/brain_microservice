@@ -7,6 +7,7 @@ from application.services.service import BrainService
 from composition_root.config import AppConfig
 from infrastructure.inbound.http.fastapi_adapter import FastApiAdapter
 from infrastructure.outbound.http.ai_agent.ai_agent_adapter import HttpAIAgentAdapter
+from infrastructure.outbound.http.ai_agent.motion_agent_adapter import HttpMotionAgentAdapter
 from infrastructure.outbound.http.base import HttpServiceConfig
 from infrastructure.outbound.http.microphone.microphone_adapter import HttpMicrophoneAdapter
 from infrastructure.outbound.http.speaker.speaker_adapter import HttpSpeakerAdapter
@@ -23,6 +24,7 @@ class BrainCoreDependency:
     tts_adapter: HttpTTSAdapter
     speaker_adapter: HttpSpeakerAdapter
     ai_agent_adapter: HttpAIAgentAdapter
+    motion_agent_adapter: HttpMotionAgentAdapter
     stepper_adapter: HttpStepperAdapter
 
 
@@ -35,6 +37,7 @@ class BrainDependency:
     tts_adapter: HttpTTSAdapter
     speaker_adapter: HttpSpeakerAdapter
     ai_agent_adapter: HttpAIAgentAdapter
+    motion_agent_adapter: HttpMotionAgentAdapter
     stepper_adapter: HttpStepperAdapter
 
 
@@ -66,6 +69,12 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
         message_endpoint=config.ai_agent_message_endpoint,
         end_session_endpoint=config.ai_agent_end_session_endpoint,
     )
+    motion_agent_adapter = HttpMotionAgentAdapter(
+        _http_config("ai_agent", config.ai_agent_base_url, config),    # the same service as conversation-flow
+        start_session_endpoint=config.ai_agent_motion_start_session_endpoint,
+        message_endpoint=config.ai_agent_motion_message_endpoint,
+        end_session_endpoint=config.ai_agent_motion_end_session_endpoint,
+    )
     stepper_adapter = HttpStepperAdapter(
         _http_config("stepper", config.stepper_base_url, config),
         left_arm_stepper_id=config.stepper_left_arm_stepper_id,
@@ -80,6 +89,7 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
         speaker_port=speaker_adapter,
         ai_agent_port=ai_agent_adapter,
         stepper_port=stepper_adapter,
+        motion_agent_port=motion_agent_adapter,
     )
     return BrainCoreDependency(
         service=service,
@@ -88,6 +98,7 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
         tts_adapter=tts_adapter,
         speaker_adapter=speaker_adapter,
         ai_agent_adapter=ai_agent_adapter,
+        motion_agent_adapter=motion_agent_adapter,
         stepper_adapter=stepper_adapter,
     )
 
@@ -111,6 +122,7 @@ def generate_brain_dependency_from_core(core: BrainCoreDependency) -> BrainDepen
         tts_adapter=core.tts_adapter,
         speaker_adapter=core.speaker_adapter,
         ai_agent_adapter=core.ai_agent_adapter,
+        motion_agent_adapter=core.motion_agent_adapter,
         stepper_adapter=core.stepper_adapter,
     )
 

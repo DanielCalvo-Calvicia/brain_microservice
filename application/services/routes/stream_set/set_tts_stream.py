@@ -10,13 +10,13 @@ from ..stream_internal.external_events import text_stream_as_ndjson_events
 logger = get_logger(__name__)
 
 
-class Step5SetTTSStream:
+class SetTTSStream:
     def __init__(self, tts_port: TTSPort) -> None:
         self.tts_port = tts_port
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
-        logger.info("pipeline step 5: setting TTS input stream connector")
+        logger.info("pipeline route: setting TTS input stream connector")
         tts_stream_in_pipe = AsyncStreamPipe[str]("tts-stream-in")
         context.tts_stream_in_pipe = tts_stream_in_pipe
         counted_text_stream = limit_and_count_text_stream(tts_stream_in_pipe.stream, request.max_text_segments)

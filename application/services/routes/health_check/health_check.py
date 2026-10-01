@@ -9,7 +9,7 @@ from ..context import VoicePipelineContext
 logger = get_logger(__name__)
 
 
-class Step1CheckHealth:
+class CheckHealth:
     def __init__(
         self,
         microphone_port: MicrophonePort,
@@ -23,7 +23,7 @@ class Step1CheckHealth:
         self.speaker_port = speaker_port
 
     async def run(self, context: VoicePipelineContext) -> None:
-        logger.info("pipeline step 1: checking adapter availability")
+        logger.info("pipeline route: checking adapter availability")
         checks = await asyncio.gather(
             self.microphone_port.check_health(),
             self.stt_port.check_health(),
@@ -37,4 +37,4 @@ class Step1CheckHealth:
                 ",".join(unavailable),
                 "required adapter availability check failed before loading streams",
             )
-        logger.info("pipeline step 1 completed: all adapters available")
+        logger.info("pipeline route completed: all adapters available")

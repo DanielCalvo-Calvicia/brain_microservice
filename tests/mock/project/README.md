@@ -18,6 +18,22 @@ microservice adapter.
 - `test_voice_pipeline_connects_mic_to_stt_to_tts_to_speaker`
   verifies the public full-pipeline method with fake ports.
 
+- `test_start_ai_agent_session_stores_the_returned_session_id`,
+  `test_start_ai_agent_session_failure_does_not_raise`,
+  `test_ask_ai_agent_starts_a_session_lazily`,
+  `test_ask_ai_agent_returns_the_directive`,
+  `test_ask_ai_agent_reconnects_once_on_session_not_found`,
+  `test_ask_ai_agent_gives_up_if_reconnecting_also_fails`,
+  `test_end_ai_agent_session_clears_the_stored_id`,
+  `test_end_ai_agent_session_is_a_noop_without_a_session`
+  cover the ai-agent session lifecycle: starting/ending a session, lazy
+  session start on first `ask_ai_agent()` call, and reconnect-once-on-
+  `SESSION_NOT_FOUND` behavior.
+
+- `test_move_arm_delegates_to_stepper`, `test_move_arm_does_not_raise_when_stepper_fails`
+  cover `move_arm`: delegates to the stepper port, and swallows a failed move
+  into a `success=False` response instead of raising.
+
 ## `test_config.py`
 
 - `test_load_config_accepts_full_endpoint_urls`

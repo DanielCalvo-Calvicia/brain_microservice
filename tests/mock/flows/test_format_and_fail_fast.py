@@ -5,12 +5,12 @@ import asyncio
 import pytest
 from application.dtos.outbound_dtos import SpeakerPlaybackRequestDto, SpeakerPlaybackResponseDto
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
-from application.services.steps.context import AsyncStreamPipe
-from application.services.steps.stream_internal.step8_mic_to_stt import (
-    Step8MicStreamToInternalStreamToSTTStream,
+from application.services.routes.context import AsyncStreamPipe
+from application.services.routes.stream_internal.mic_to_stt import (
+    MicStreamToInternalStreamToSTTStream,
 )
-from application.services.steps.stream_internal.step10_tts_to_speaker import (
-    Step10TTSStreamToInternalStreamToSpeakerStream,
+from application.services.routes.stream_internal.tts_to_speaker import (
+    TTSStreamToInternalStreamToSpeakerStream,
 )
 from domain.errors import ExternalServiceInvalidResponseError, ExternalServiceUnavailableError
 from tests.shared.fakes import DiagnosticSpeaker, DiagnosticSTT, DiagnosticTTS, build_brain_service
@@ -26,7 +26,7 @@ def _started(rate: int, channels: int = 1) -> bytes:
 
 @pytest.mark.asyncio
 async def test_a_microphone_announcing_another_rate_than_negotiated_is_rejected() -> None:
-    bridge = Step8MicStreamToInternalStreamToSTTStream(
+    bridge = MicStreamToInternalStreamToSTTStream(
         byte_stream((_started(44100),)), AsyncStreamPipe("stt-in"), expected_sample_rate=16000
     )
 
@@ -36,7 +36,7 @@ async def test_a_microphone_announcing_another_rate_than_negotiated_is_rejected(
 
 @pytest.mark.asyncio
 async def test_a_stereo_microphone_is_rejected_because_stt_is_mono() -> None:
-    bridge = Step8MicStreamToInternalStreamToSTTStream(
+    bridge = MicStreamToInternalStreamToSTTStream(
         byte_stream((_started(16000, channels=2),)), AsyncStreamPipe("stt-in")
     )
 
@@ -47,7 +47,7 @@ async def test_a_stereo_microphone_is_rejected_because_stt_is_mono() -> None:
 @pytest.mark.asyncio
 async def test_tts_audio_in_another_format_than_requested_never_reaches_the_speaker() -> None:
     wire = stream_event_bytes("stream_started", 1, {"sample_rate": 22050, "channels": 1})
-    bridge = Step10TTSStreamToInternalStreamToSpeakerStream(
+    bridge = TTSStreamToInternalStreamToSpeakerStream(
         byte_stream((wire,)), AsyncStreamPipe("speaker-in"), expected_format=(24000, 1)
     )
 

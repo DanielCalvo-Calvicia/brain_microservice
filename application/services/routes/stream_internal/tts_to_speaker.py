@@ -27,7 +27,7 @@ from .external_events import ndjson_events, raise_for_stream_error, stage_encode
 logger = get_logger(__name__)
 
 
-class Step10TTSStreamToInternalStreamToSpeakerStream:
+class TTSStreamToInternalStreamToSpeakerStream:
     """TTS outbound events -> (internal stream of Speaker inbound events) -> speaker input.
 
     Audio is passed through untouched (TTS already produced the format Brain asked for, which is

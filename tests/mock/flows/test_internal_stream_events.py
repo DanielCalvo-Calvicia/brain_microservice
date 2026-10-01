@@ -9,16 +9,16 @@ import asyncio
 import base64
 
 import pytest
-from application.dtos.outbound_dtos import AIAgentMessageResponseDto, MotorDirectiveDto, StepperMoveResponseDto
-from application.services.steps.context import AsyncStreamPipe
-from application.services.steps.stream_internal.step8_mic_to_stt import (
-    Step8MicStreamToInternalStreamToSTTStream,
+from application.dtos.outbound_dtos import AIAgentMessageResponseDto, MotorDirectiveDto
+from application.services.routes.context import AsyncStreamPipe
+from application.services.routes.stream_internal.mic_to_stt import (
+    MicStreamToInternalStreamToSTTStream,
 )
-from application.services.steps.stream_internal.step9_stt_to_tts import (
-    Step9STTStreamToInternalStreamToTTSStream,
+from application.services.routes.stream_internal.stt_to_tts import (
+    STTStreamToInternalStreamToTTSStream,
 )
-from application.services.steps.stream_internal.step10_tts_to_speaker import (
-    Step10TTSStreamToInternalStreamToSpeakerStream,
+from application.services.routes.stream_internal.tts_to_speaker import (
+    TTSStreamToInternalStreamToSpeakerStream,
 )
 from contracts.stream.codec import NdjsonDecoder
 from contracts.stream.common.base import BaseEvent, EventType
@@ -27,6 +27,7 @@ from contracts.stream.microservices.stt.inbound.completed import STTCompletedInb
 from contracts.stream.microservices.stt.inbound.partial import STTPartialInboundEventDTO
 from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND
 from shared_logging.testing import capture
+from tests.shared.fakes import DiagnosticAIAgent, DiagnosticMotionAgent, DiagnosticStepper, build_brain_service
 from tests.shared.streams import byte_stream
 from tests.shared.wire import stream_event_bytes
 
@@ -58,7 +59,7 @@ def _mic_wire(chunks: tuple[bytes, ...], *, completed_audio: bytes = b"") -> byt
 
 @pytest.mark.asyncio
 async def test_mic_to_stt_relabels_microphone_events_as_stt_inbound_events() -> None:
-    bridge = Step8MicStreamToInternalStreamToSTTStream(
+    bridge = MicStreamToInternalStreamToSTTStream(
         byte_stream((_mic_wire((b"mic-", b"audio")),)), AsyncStreamPipe("stt-in")
     )
 
@@ -79,7 +80,7 @@ async def test_mic_to_stt_relabels_microphone_events_as_stt_inbound_events() -> 
 
 @pytest.mark.asyncio
 async def test_mic_to_stt_forwards_audio_that_only_the_completed_event_carries() -> None:
-    bridge = Step8MicStreamToInternalStreamToSTTStream(
+    bridge = MicStreamToInternalStreamToSTTStream(
         byte_stream((_mic_wire((), completed_audio=b"all-at-once"),)), AsyncStreamPipe("stt-in")
     )
 
@@ -97,7 +98,7 @@ async def test_mic_to_stt_forwards_audio_that_only_the_completed_event_carries()
 @pytest.mark.asyncio
 async def test_mic_to_stt_writes_stt_inbound_ndjson_that_the_contract_accepts() -> None:
     stt_in: AsyncStreamPipe[bytes] = AsyncStreamPipe("stt-in")
-    bridge = Step8MicStreamToInternalStreamToSTTStream(
+    bridge = MicStreamToInternalStreamToSTTStream(
         byte_stream((_mic_wire((b"one", b"two")),)), stt_in
     )
 
@@ -119,7 +120,7 @@ async def test_mic_to_stt_writes_stt_inbound_ndjson_that_the_contract_accepts() 
 async def test_a_microphone_that_breaks_the_contract_fails_the_stt_input() -> None:
     bad = stream_event_bytes("partial", 1, {"bytes_base64": _b64(b"x")})  # no stream_started first
     stt_in: AsyncStreamPipe[bytes] = AsyncStreamPipe("stt-in")
-    bridge = Step8MicStreamToInternalStreamToSTTStream(byte_stream((bad,)), stt_in)
+    bridge = MicStreamToInternalStreamToSTTStream(byte_stream((bad,)), stt_in)
 
     with pytest.raises(Exception, match="stream_started must be the first event"):
         await bridge.mic_stream_to_internal_stream()
@@ -133,7 +134,7 @@ async def test_a_microphone_that_breaks_the_contract_fails_the_stt_input() -> No
 async def test_a_microphone_error_event_is_reported_as_a_microphone_failure() -> None:
     wire = stream_event_bytes("stream_started", 1, {"message": "m", "sample_rate": 16000, "channels": 1})
     wire += stream_event_bytes("error", 2, {"code": "capture_failed", "message": "unplugged", "recoverable": False})
-    bridge = Step8MicStreamToInternalStreamToSTTStream(byte_stream((wire,)), AsyncStreamPipe("stt-in"))
+    bridge = MicStreamToInternalStreamToSTTStream(byte_stream((wire,)), AsyncStreamPipe("stt-in"))
 
     with pytest.raises(Exception, match="capture_failed: unplugged"):
         await bridge.mic_stream_to_internal_stream()
@@ -157,55 +158,54 @@ def _stt_sse(texts: tuple[str, ...]) -> bytes:
 _FIXED_REPLY = "the reply"
 
 
-async def _fixed_ai_agent(text: str) -> AIAgentMessageResponseDto:
-    return AIAgentMessageResponseDto(success=True, response=_FIXED_REPLY)
+class _UnreachableStepper(DiagnosticStepper):
+    async def move(self, directive):
+        raise AssertionError("no directive expected in this test")
 
 
-async def _unreachable_move_arm(directive: MotorDirectiveDto) -> StepperMoveResponseDto:
-    raise AssertionError("no directive expected in this test")
+def _fixed_brain_service():
+    return build_brain_service(ai_agent=DiagnosticAIAgent(response=_FIXED_REPLY), stepper=_UnreachableStepper())
 
 
 @pytest.mark.asyncio
-async def test_stt_to_tts_asks_ai_agent_once_with_the_whole_utterance_and_speaks_its_reply() -> None:
-    # The raw STT text is never spoken: it is sent to ai-agent once, and its reply - not the
-    # transcript - is what TTS receives as the single completed event's text.
-    received: list[str] = []
+async def test_stt_to_tts_asks_ai_agent_once_per_utterance_and_speaks_each_reply() -> None:
+    # The raw STT text is never spoken: each STT completed event (one utterance, since STT's own
+    # silence detection marks the boundary) is sent to ai-agent on its own, immediately - not
+    # accumulated - and its reply - not the transcript - is what TTS receives.
+    class _EchoingAIAgent(DiagnosticAIAgent):
+        async def message(self, request):
+            self.message_requests.append(request)
+            return AIAgentMessageResponseDto(success=True, response=f"reply to {request.message!r}")
 
-    async def ask_ai_agent(text: str) -> AIAgentMessageResponseDto:
-        received.append(text)
-        return AIAgentMessageResponseDto(success=True, response="spoken reply")
-
-    bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("hello ", "world")),)), AsyncStreamPipe("tts-in"),
-        ask_ai_agent=ask_ai_agent, move_arm=_unreachable_move_arm,
+    ai_agent = _EchoingAIAgent()
+    brain_service = build_brain_service(ai_agent=ai_agent, stepper=_UnreachableStepper())
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("hello ", "world")),)), AsyncStreamPipe("tts-in"), brain_service
     )
 
     await bridge.stt_stream_to_internal_stream()
 
-    events = await _collect_until_completed(bridge.internal_stream.stream)
+    events = [e async for e in bridge.internal_stream.stream]
     _assert_sequence(events)
-    assert [event.type for event in events] == [EventType.START_STREAM, EventType.COMPLETED]
-    assert received == ["hello world"]
-    assert (events[1].payload.reason, events[1].payload.output) == ("completed", "spoken reply")
+    assert [event.type for event in events] == [
+        EventType.START_STREAM, EventType.COMPLETED, EventType.COMPLETED,
+    ]
+    assert [r.message for r in ai_agent.message_requests] == ["hello", "world"]  # stripped, one call per utterance, in order
+    assert (events[1].payload.reason, events[1].payload.output) == ("completed", "reply to 'hello'")
+    assert (events[2].payload.reason, events[2].payload.output) == ("completed", "reply to 'world'")
 
 
 @pytest.mark.asyncio
-async def test_a_movement_directive_is_dispatched_to_stepper_without_blocking_the_reply() -> None:
-    moved: list[MotorDirectiveDto] = []
+async def test_a_movement_sequence_is_dispatched_to_stepper_in_order_without_blocking_the_reply() -> None:
+    there = MotorDirectiveDto(arm="left", degrees=90.0, direction="forward")
+    back = MotorDirectiveDto(arm="left", degrees=-90.0, direction="forward")
+    ai_agent = DiagnosticAIAgent(response="moving now")
+    motion_agent = DiagnosticMotionAgent(directives=(there, back))
+    stepper = DiagnosticStepper(success=True, message="moved")
+    brain_service = build_brain_service(ai_agent=ai_agent, stepper=stepper, motion_agent=motion_agent)
 
-    async def ask_ai_agent(text: str) -> AIAgentMessageResponseDto:
-        return AIAgentMessageResponseDto(
-            success=True, response="moving now",
-            directive=MotorDirectiveDto(arm="left", degrees=90.0, direction="forward"),
-        )
-
-    async def move_arm(directive: MotorDirectiveDto) -> StepperMoveResponseDto:
-        moved.append(directive)
-        return StepperMoveResponseDto(success=True, message="moved")
-
-    bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("move my arm",)),)), AsyncStreamPipe("tts-in"),
-        ask_ai_agent=ask_ai_agent, move_arm=move_arm,
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("move my arm there and back",)),)), AsyncStreamPipe("tts-in"), brain_service
     )
 
     await bridge.stt_stream_to_internal_stream()
@@ -214,9 +214,47 @@ async def test_a_movement_directive_is_dispatched_to_stepper_without_blocking_th
     assert (events[1].payload.reason, events[1].payload.output) == ("completed", "moving now")
     # The reply above is already available before the fire-and-forget move task is awaited here.
     # It is deliberately NOT tracked by VoicePipelineContext: a movement must survive this
-    # pipeline run's own cleanup, not be cancelled by it (see _dispatch_move's docstring).
+    # pipeline run's own cleanup, not be cancelled by it (see _dispatch_moves' docstring).
     await asyncio.gather(*bridge._background_moves)
-    assert moved == [MotorDirectiveDto(arm="left", degrees=90.0, direction="forward")]
+    assert stepper.move_requests == [there, back]
+
+
+@pytest.mark.asyncio
+async def test_a_question_from_motion_flow_is_spoken_and_nothing_moves() -> None:
+    motion_agent = DiagnosticMotionAgent(response="How many degrees?", awaiting_user_input=True)
+    brain_service = build_brain_service(
+        ai_agent=DiagnosticAIAgent(response="never used"), stepper=_UnreachableStepper(), motion_agent=motion_agent)
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("move my arm",)),)), AsyncStreamPipe("tts-in"), brain_service
+    )
+
+    await bridge.stt_stream_to_internal_stream()
+
+    events = await _collect_until_completed(bridge.internal_stream.stream)
+    assert events[1].payload.output == "How many degrees?"
+    assert not bridge._background_moves
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_flow_failure_speaks_the_apology_and_still_moves() -> None:
+    class _Down(DiagnosticAIAgent):
+        async def message(self, request):
+            raise RuntimeError("ai-agent is down")
+
+    directive = MotorDirectiveDto(arm="right", degrees=45.0, direction="forward")
+    stepper = DiagnosticStepper()
+    brain_service = build_brain_service(
+        ai_agent=_Down(), stepper=stepper, motion_agent=DiagnosticMotionAgent(directives=(directive,)))
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("move my right arm",)),)), AsyncStreamPipe("tts-in"), brain_service
+    )
+
+    await bridge.stt_stream_to_internal_stream()
+
+    events = await _collect_until_completed(bridge.internal_stream.stream)
+    assert "could not reach my decision-making service" in events[1].payload.output
+    await asyncio.gather(*bridge._background_moves)
+    assert stepper.move_requests == [directive]
 
 
 @pytest.mark.asyncio
@@ -224,8 +262,8 @@ async def test_stt_error_event_fails_the_tts_text_input() -> None:
     wire = b"data: " + stream_event_bytes("stream_started", 1, {}) + b"\n"
     wire += b"data: " + stream_event_bytes("error", 2, {"code": "stream_failed", "message": "whisper died", "recoverable": True}) + b"\n"
     tts_in: AsyncStreamPipe[str] = AsyncStreamPipe("tts-in")
-    bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((wire,)), tts_in, ask_ai_agent=_fixed_ai_agent, move_arm=_unreachable_move_arm,
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((wire,)), tts_in, _fixed_brain_service()
     )
 
     with pytest.raises(Exception, match="whisper died"):
@@ -266,7 +304,7 @@ def _tts_wire(*segments: tuple[bytes, ...]) -> bytes:
 
 @pytest.mark.asyncio
 async def test_tts_to_speaker_relabels_tts_events_without_duplicating_the_audio() -> None:
-    bridge = Step10TTSStreamToInternalStreamToSpeakerStream(
+    bridge = TTSStreamToInternalStreamToSpeakerStream(
         byte_stream((_tts_wire((b"tts-", b"audio")),)), AsyncStreamPipe("speaker-in")
     )
 
@@ -287,7 +325,7 @@ async def test_tts_to_speaker_relabels_tts_events_without_duplicating_the_audio(
 @pytest.mark.asyncio
 async def test_tts_to_speaker_writes_speaker_inbound_ndjson_the_speaker_contract_accepts() -> None:
     speaker_in: AsyncStreamPipe[bytes] = AsyncStreamPipe("speaker-in")
-    bridge = Step10TTSStreamToInternalStreamToSpeakerStream(
+    bridge = TTSStreamToInternalStreamToSpeakerStream(
         byte_stream((_tts_wire((b"a",), (b"b",)),)), speaker_in
     )
 
@@ -333,7 +371,7 @@ async def test_a_recoverable_tts_error_skips_one_text_but_not_the_conversation()
         _tts_partial(b"second"),
         _tts_completed(b"second"),
     )
-    bridge = Step10TTSStreamToInternalStreamToSpeakerStream(byte_stream((wire,)), AsyncStreamPipe("speaker-in"))
+    bridge = TTSStreamToInternalStreamToSpeakerStream(byte_stream((wire,)), AsyncStreamPipe("speaker-in"))
 
     await bridge.tts_stream_to_internal_stream()
 
@@ -350,7 +388,7 @@ async def test_a_fatal_tts_error_fails_the_speaker_input() -> None:
     wire = stream_event_bytes("stream_started", 1, {"sample_rate": 24000, "channels": 1})
     wire += stream_event_bytes("error", 2, {"code": "stream_failed", "message": "engine gone", "recoverable": False})
     speaker_in: AsyncStreamPipe[bytes] = AsyncStreamPipe("speaker-in")
-    bridge = Step10TTSStreamToInternalStreamToSpeakerStream(byte_stream((wire,)), speaker_in)
+    bridge = TTSStreamToInternalStreamToSpeakerStream(byte_stream((wire,)), speaker_in)
 
     with pytest.raises(Exception, match="engine gone"):
         await bridge.tts_stream_to_internal_stream()
@@ -365,9 +403,8 @@ async def test_a_fatal_tts_error_fails_the_speaker_input() -> None:
 
 @pytest.mark.asyncio
 async def test_internal_stream_logs_completed_event_as_structured_record() -> None:
-    bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in"),
-        ask_ai_agent=_fixed_ai_agent, move_arm=_unreachable_move_arm,
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in"), _fixed_brain_service()
     )
 
     with capture("brain", level="INFO") as logs:
@@ -381,9 +418,8 @@ async def test_internal_stream_logs_completed_event_as_structured_record() -> No
 
 @pytest.mark.asyncio
 async def test_internal_stream_remains_open_after_completed_event_until_pipeline_shutdown() -> None:
-    bridge = Step9STTStreamToInternalStreamToTTSStream(
-        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in"),
-        ask_ai_agent=_fixed_ai_agent, move_arm=_unreachable_move_arm,
+    bridge = STTStreamToInternalStreamToTTSStream(
+        byte_stream((_stt_sse(("hello",)),)), AsyncStreamPipe("tts-in"), _fixed_brain_service()
     )
 
     await bridge.stt_stream_to_internal_stream()

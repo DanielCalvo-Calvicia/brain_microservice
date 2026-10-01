@@ -11,6 +11,10 @@ from infrastructure.outbound.http.base import HttpServiceClient, HttpServiceConf
 logger = get_logger(__name__)
 
 
+def _opposite(direction: str) -> str:
+    return "reverse" if direction == "forward" else "forward"
+
+
 class HttpStepperAdapter(HttpServiceClient, StepperPort):
     """Translates a MotorDirective (arm/degrees/direction) into stepper's own
     /control/{stepper_id}/rotate call. ai-agent has no notion of stepper_id or RPM; that mapping
@@ -33,16 +37,20 @@ class HttpStepperAdapter(HttpServiceClient, StepperPort):
 
     async def move(self, directive: MotorDirectiveDto) -> StepperMoveResponseDto:
         stepper_id = self._left_arm_stepper_id if directive.arm == "left" else self._right_arm_stepper_id
-        rotations = directive.degrees / 360.0
+        # Degrees are signed ("left 90" then "left -90" brings the arm back), but stepper only reads the size of
+        # `rotations` (it takes its absolute value) and the direction says which way: a negative number of
+        # degrees is the same rotation the other way.
+        rotations = abs(directive.degrees) / 360.0
+        direction = directive.direction if directive.degrees >= 0 else _opposite(directive.direction)
         endpoint = self._rotate_endpoint_template.format(stepper_id=stepper_id)
-        params = {"rotations": rotations, "rpm": self._default_rpm, "direction": directive.direction}
+        params = {"rotations": rotations, "rpm": self._default_rpm, "direction": direction}
         logger.info(
             "sending rotate command to stepper",
             arm=directive.arm,
             stepper_id=stepper_id,
             rotations=rotations,
             rpm=self._default_rpm,
-            direction=directive.direction,
+            direction=direction,
         )
         try:
             response = await self._client.post(self._url(endpoint), params=params, headers=self._headers())

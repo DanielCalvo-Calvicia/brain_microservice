@@ -12,7 +12,7 @@ from contracts.stream.codec import NdjsonDecoder, SseDecoder, StreamSchema
 from contracts.stream.common.base import BaseEvent, ContractViolation
 
 from application.dtos.outbound_dtos import ExternalHealthResponseDto
-from application.services.steps.stream_internal.external_events import raise_if_error_event
+from application.services.routes.stream_internal.external_events import raise_if_error_event
 from shared_logging import async_event_hooks, get_logger
 from domain.errors import (
     ExternalServiceAuthenticationError,

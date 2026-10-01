@@ -9,7 +9,10 @@ from application.dtos.outbound_dtos import (
     AIAgentMessageResponseDto,
     AIAgentStartSessionRequestDto,
     MicrophoneStreamRequestDto,
+    MotionMessageRequestDto,
+    MotionMessageResponseDto,
     MotorDirectiveDto,
+    RobotContextDto,
     SpeakerPlaybackRequestDto,
     STTBatchRequestDto,
     STTSetStreamRequestDto,
@@ -19,6 +22,7 @@ from application.dtos.outbound_dtos import (
     TTSTextStreamRequestDto,
 )
 from application.dtos.service_dtos import (
+    AgentDecisionDto,
     BatchTranscriptionServiceRequestDto,
     BatchTranscriptionServiceResponseDto,
     HealthCheckServiceResponseDto,
@@ -33,6 +37,7 @@ from application.ports.outbound_ports import (
     AIAgentPort,
     HealthCheckPort,
     MicrophonePort,
+    MotionAgentPort,
     SpeakerPort,
     STTPort,
     StepperPort,
@@ -40,7 +45,7 @@ from application.ports.outbound_ports import (
 )
 from application.ports.service_port import BrainServicePort
 from application.services.pipeline import VoicePipelineFlow
-from application.services.steps.context import (
+from application.services.routes.context import (
     AsyncStreamPipe,
     verify_microphone_output,
     verify_speaker_input,
@@ -49,9 +54,9 @@ from application.services.steps.context import (
     verify_stt_output,
     verify_tts_output,
 )
-from application.services.steps.stream_internal.external_events import raise_for_stream_error, sse_events, text_stream_as_ndjson_events
-from application.services.steps.stream_internal.step10_tts_to_speaker import Step10TTSStreamToInternalStreamToSpeakerStream
-from application.services.steps.stream_internal.step8_mic_to_stt import Step8MicStreamToInternalStreamToSTTStream
+from application.services.routes.stream_internal.external_events import raise_for_stream_error, sse_events, text_stream_as_ndjson_events
+from application.services.routes.stream_internal.mic_to_stt import MicStreamToInternalStreamToSTTStream
+from application.services.routes.stream_internal.tts_to_speaker import TTSStreamToInternalStreamToSpeakerStream
 from shared_logging import get_logger, span
 from domain.errors import ExternalServiceError, ExternalServiceUnavailableError
 from domain.models import ServiceStatus
@@ -68,6 +73,7 @@ class BrainService(BrainServicePort):
         speaker_port: SpeakerPort,
         ai_agent_port: AIAgentPort,
         stepper_port: StepperPort,
+        motion_agent_port: MotionAgentPort | None = None,
     ) -> None:
         self.microphone_port = microphone_port
         self.stt_port = stt_port
@@ -75,12 +81,11 @@ class BrainService(BrainServicePort):
         self.speaker_port = speaker_port
         self.ai_agent_port = ai_agent_port
         self.stepper_port = stepper_port
+        # Without it (None) Brain only talks: every utterance goes to conversation-flow and nothing moves.
+        self.motion_agent_port = motion_agent_port
         self._ai_agent_session_id: str | None = None
-        self.voice_pipeline = VoicePipelineFlow(
-            microphone_port, stt_port, tts_port, speaker_port,
-            ask_ai_agent=self.ask_ai_agent,
-            move_arm=self.move_arm,
-        )
+        self._motion_session_id: str | None = None
+        self.voice_pipeline = VoicePipelineFlow(microphone_port, stt_port, tts_port, speaker_port, self)
 
     async def check_integrations(self) -> HealthCheckServiceResponseDto:
         logger.info("checking external microservice health")
@@ -131,7 +136,7 @@ class BrainService(BrainServicePort):
             )
             verify_stt_input(stt_input)
             stt_input_task = asyncio.create_task(self.stt_port.set_stream(stt_input))
-            mic_to_stt = Step8MicStreamToInternalStreamToSTTStream(
+            mic_to_stt = MicStreamToInternalStreamToSTTStream(
                 microphone_output.audio_stream,
                 stt_stream_in_pipe,
                 expected_sample_rate=microphone_output.sample_rate,
@@ -221,7 +226,7 @@ class BrainService(BrainServicePort):
         )
         verify_speaker_input(speaker_input)
         speaker_task = asyncio.create_task(self.speaker_port.play_stream(speaker_input))
-        tts_to_speaker = Step10TTSStreamToInternalStreamToSpeakerStream(
+        tts_to_speaker = TTSStreamToInternalStreamToSpeakerStream(
             tts_output.audio_stream,
             speaker_stream_in_pipe,
             completed_outputs_to_read=1,
@@ -280,18 +285,43 @@ class BrainService(BrainServicePort):
         finally:
             self._ai_agent_session_id = None
 
-    async def ask_ai_agent(self, text: str) -> AIAgentMessageResponseDto:
-        """Sends text to ai-agent and returns its decision (reply text, and a movement directive
-        when the plan included one). Starts a session on demand if none exists yet, and
-        transparently reconnects once when ai-agent reports SESSION_NOT_FOUND (it keeps sessions
-        in memory only, so a restart loses them; see ai-agent/README.md's "Session lifecycle")."""
+    async def start_motion_session(self) -> None:
+        """Best-effort, like start_ai_agent_session: motion-flow is ai-agent's second agent (same service)."""
+        if self.motion_agent_port is None:
+            return
+        try:
+            response = await self.motion_agent_port.start_session(AIAgentStartSessionRequestDto())
+            if response.success:
+                self._motion_session_id = response.session_id
+                logger.info("motion-flow session started", session_id=response.session_id)
+            else:
+                logger.warning("motion-flow session start was not successful", detail=response.message)
+        except Exception as exc:
+            logger.warning("motion-flow session could not be started", error=str(exc))
+
+    async def end_motion_session(self) -> None:
+        if self.motion_agent_port is None or not self._motion_session_id:
+            return
+        try:
+            await self.motion_agent_port.end_session(AIAgentEndSessionRequestDto(session_id=self._motion_session_id))
+            logger.info("motion-flow session ended", session_id=self._motion_session_id)
+        except Exception as exc:
+            logger.error("motion-flow session end failed", session_id=self._motion_session_id, error=str(exc))
+        finally:
+            self._motion_session_id = None
+
+    async def ask_ai_agent(self, text: str, robot_context: RobotContextDto | None = None) -> AIAgentMessageResponseDto:
+        """Sends text to ai-agent's conversation-flow and returns what to say. ``robot_context`` is what
+        motion-flow decided for this same text, so the reply says what the robot does. Starts a session on
+        demand if none exists yet, and transparently reconnects once when ai-agent reports SESSION_NOT_FOUND
+        (it keeps sessions in memory only, so a restart loses them; see ai-agent/README.md's "Session lifecycle")."""
         if not self._ai_agent_session_id:
             await self.start_ai_agent_session()
         if not self._ai_agent_session_id:
             raise ExternalServiceUnavailableError("ai_agent", "no session could be established")
 
         response = await self.ai_agent_port.message(
-            AIAgentMessageRequestDto(session_id=self._ai_agent_session_id, message=text)
+            AIAgentMessageRequestDto(session_id=self._ai_agent_session_id, message=text, robot_context=robot_context)
         )
         if response.error_code != "SESSION_NOT_FOUND":
             return response
@@ -302,8 +332,68 @@ class BrainService(BrainServicePort):
         if not self._ai_agent_session_id:
             return response
         return await self.ai_agent_port.message(
-            AIAgentMessageRequestDto(session_id=self._ai_agent_session_id, message=text)
+            AIAgentMessageRequestDto(session_id=self._ai_agent_session_id, message=text, robot_context=robot_context)
         )
+
+    async def ask_motion_agent(self, text: str) -> MotionMessageResponseDto:
+        """Sends text to ai-agent's motion-flow: which movements, if any, did the user ask for? Same session
+        handling as ask_ai_agent (lazy start, one reconnect on SESSION_NOT_FOUND)."""
+        if self.motion_agent_port is None:
+            raise ExternalServiceUnavailableError("ai_agent", "motion-flow is not configured")
+        if not self._motion_session_id:
+            await self.start_motion_session()
+        if not self._motion_session_id:
+            raise ExternalServiceUnavailableError("ai_agent", "no motion-flow session could be established")
+
+        response = await self.motion_agent_port.message(
+            MotionMessageRequestDto(session_id=self._motion_session_id, message=text)
+        )
+        if response.error_code != "SESSION_NOT_FOUND":
+            return response
+
+        logger.info("motion-flow session was gone; starting a new one and retrying once")
+        self._motion_session_id = None
+        await self.start_motion_session()
+        if not self._motion_session_id:
+            return response
+        return await self.motion_agent_port.message(
+            MotionMessageRequestDto(session_id=self._motion_session_id, message=text)
+        )
+
+    async def decide(self, text: str) -> AgentDecisionDto:
+        """
+        What Brain does for one utterance. motion-flow goes first: it says which movements were asked for,
+        or that it needs a detail from the user. Then conversation-flow words the reply, knowing what the
+        robot does (robot_context). Neither agent moves anything: the movements are returned here and Brain
+        runs them. A motion-flow failure never stops the conversation (nothing moves), and a conversation-flow
+        failure never cancels an accepted movement (reply None: the caller speaks its own apology).
+        """
+        motion = await self._decide_motion(text)
+
+        if motion is not None and motion.awaiting_user_input:
+            # A detail is missing: speak the question, nothing moves, and the answer goes to motion-flow next.
+            return AgentDecisionDto(reply=motion.response)
+
+        directives = motion.directives if motion is not None else ()
+        try:
+            conversation = await self.ask_ai_agent(text, _robot_context_of(motion))
+        except Exception as exc:
+            logger.error("ai-agent call failed; the caller speaks its own apology", error=str(exc))
+            return AgentDecisionDto(reply=None, directives=directives)
+        return AgentDecisionDto(reply=conversation.response, directives=directives)
+
+    async def _decide_motion(self, text: str) -> MotionMessageResponseDto | None:
+        if self.motion_agent_port is None:
+            return None
+        try:
+            motion = await self.ask_motion_agent(text)
+        except Exception as exc:
+            logger.error("motion-flow call failed; nothing will move for this utterance", error=str(exc))
+            return None
+        if not motion.success:
+            logger.warning("motion-flow could not process the utterance; nothing will move", error_code=motion.error_code)
+            return None
+        return motion
 
     async def move_arm(self, directive: MotorDirectiveDto) -> StepperMoveResponseDto:
         """Only Brain calls stepper. ai-agent only hands over the directive; a failed or refused
@@ -314,6 +404,19 @@ class BrainService(BrainServicePort):
         except Exception as exc:
             logger.error("stepper move failed", arm=directive.arm, degrees=directive.degrees, error=str(exc))
             return StepperMoveResponseDto(success=False, message=str(exc))
+
+    async def move_arms(self, directives: tuple[MotorDirectiveDto, ...]) -> list[StepperMoveResponseDto]:
+        """Runs a movement sequence in order, one movement after the other. It stops at the first one that
+        fails: going on would leave the arm somewhere the sequence did not intend ("left 90" refused, then
+        "left -90" would turn it the wrong way)."""
+        results: list[StepperMoveResponseDto] = []
+        for directive in directives:
+            result = await self.move_arm(directive)
+            results.append(result)
+            if not result.success:
+                logger.warning("movement failed; the rest of the sequence is not run", done=len(results), total=len(directives))
+                break
+        return results
 
     async def _check(self, name: str, port: HealthCheckPort) -> ServiceStatus:
         try:
@@ -326,6 +429,18 @@ class BrainService(BrainServicePort):
         except Exception as exc:
             logger.error("microservice check failed", service=name, error=str(exc))
             return ServiceStatus(name=name, is_available=False, detail=str(exc))
+
+
+def _robot_context_of(motion: MotionMessageResponseDto | None) -> RobotContextDto | None:
+    """What conversation-flow is told about the movement: the accepted sequence, or why there is none.
+    None when the utterance was no movement request (motion-flow returned nothing to do and nothing to say)."""
+    if motion is None:
+        return None
+    if motion.directives:
+        return RobotContextDto(directives=motion.directives)
+    if motion.response.strip():
+        return RobotContextDto(rejected_reason=motion.response.strip())
+    return None
 
 
 async def _finish_task(task: asyncio.Task, cancelled_message: str) -> None:

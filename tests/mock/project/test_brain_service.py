@@ -4,6 +4,7 @@ from application.dtos.outbound_dtos import (
     AIAgentMessageResponseDto,
     AIAgentStartSessionResponseDto,
     MotorDirectiveDto,
+    RobotContextDto,
     STTBatchRequestDto,
 )
 from application.dtos.service_dtos import (
@@ -80,14 +81,16 @@ async def test_voice_pipeline_connects_mic_to_stt_to_tts_to_speaker() -> None:
     response = await service.run_voice_pipeline(VoicePipelineServiceRequestDto(max_text_segments=2))
 
     assert response.success is True
-    assert response.text_segments_forwarded == 1
+    # DiagnosticSTT's default two chunks ("hello", "world") are two separate utterances: one ai-agent
+    # decision each, both within the cap of 2.
+    assert response.text_segments_forwarded == 2
     assert microphone.started is True
     assert microphone.stopped is False
     assert stt.last_stream_request is not None
     assert tts.set_requests == []
-    # STT's raw text is never spoken directly: it is sent to ai-agent, and its reply (the
-    # DiagnosticAIAgent default) is what TTS actually receives.
-    assert tts.text_received == ["diagnostic reply"]
+    # STT's raw text is never spoken directly: each utterance is sent to ai-agent, and its reply (the
+    # DiagnosticAIAgent default) is what TTS actually receives - once per utterance.
+    assert tts.text_received == ["diagnostic reply", "diagnostic reply"]
     assert speaker.audio_received == b"wav"
 
 
@@ -128,14 +131,14 @@ async def test_ask_ai_agent_starts_a_session_lazily() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_ai_agent_returns_the_directive() -> None:
-    directive = MotorDirectiveDto(arm="left", degrees=90.0, direction="forward")
-    ai_agent = DiagnosticAIAgent(directive=directive)
+async def test_ask_ai_agent_passes_the_robot_context_on() -> None:
+    context = RobotContextDto(directives=(MotorDirectiveDto(arm="left", degrees=90.0, direction="forward"),))
+    ai_agent = DiagnosticAIAgent()
     service = build_brain_service(ai_agent=ai_agent)
 
-    response = await service.ask_ai_agent("move your left arm")
+    await service.ask_ai_agent("move your left arm", context)
 
-    assert response.directive == directive
+    assert ai_agent.last_message.robot_context == context
 
 
 @pytest.mark.asyncio

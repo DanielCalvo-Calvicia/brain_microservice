@@ -4,7 +4,7 @@ from contextlib import suppress
 import pytest
 
 from application.dtos.outbound_dtos import MicrophoneStreamRequestDto
-from application.services.steps.stream_helpers import read_one_chunk
+from application.services.routes.stream_helpers import read_one_chunk
 from tests.shared.live_microservices import LiveMicroservices
 
 

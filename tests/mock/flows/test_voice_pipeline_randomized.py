@@ -25,7 +25,7 @@ from application.dtos.outbound_dtos import (
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
 from application.services.service import BrainService
 from tests.shared.fakes import DiagnosticAIAgent, DiagnosticStepper
-from application.services.steps.stream_internal.external_events import ndjson_events
+from application.services.routes.stream_internal.external_events import ndjson_events
 from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND, TTS_INBOUND
 from tests.shared.wire import stream_event_bytes
 
@@ -212,8 +212,8 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
     microphone_chunks = _random_byte_chunks(rng, 7, min_size=16, max_size=128)
     stt_text_chunks = _random_text_chunks(rng, 5)
     tts_audio_chunks = _random_byte_chunks(rng, 4, min_size=32, max_size=256)
-    # max_text_segments=1 below means Step9 stops at the first non-blank STT chunk (unstripped)
-    # and asks ai-agent with just that; only its one reply is ever forwarded to TTS.
+    # max_text_segments=1 below means route9 decides on the first non-blank STT chunk (stripped) and
+    # then stops; only its one reply is ever forwarded to TTS.
     expected_ai_agent_input = next(text for text in stt_text_chunks if text.strip())
     ai_agent = DiagnosticAIAgent(response="scripted reply")
     events: list[str] = []
@@ -248,7 +248,7 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
     assert stt.stream_requests[0].silence_limit_seconds == 0.5
     assert tuple(stt.audio_chunks_received) == microphone_chunks
 
-    assert ai_agent.last_message.message == expected_ai_agent_input
+    assert ai_agent.last_message.message == expected_ai_agent_input.strip()  # route9 strips each utterance
     assert tts.set_requests == []
     assert tuple(tts.text_received) == ("scripted reply",)
     assert len(tts.text_stream_requests) == 1

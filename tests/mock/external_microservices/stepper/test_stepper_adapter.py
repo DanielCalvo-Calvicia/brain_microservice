@@ -68,6 +68,33 @@ async def test_degrees_are_converted_to_full_revolutions_and_default_rpm_and_dir
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("degrees,direction,expected_direction", [
+    (-90.0, "forward", "reverse"),     # "left -90": the same rotation, the other way
+    (-90.0, "reverse", "forward"),
+    (90.0, "reverse", "reverse"),
+    (0.0, "forward", "forward"),
+])
+async def test_negative_degrees_are_sent_as_the_opposite_direction_with_a_positive_size(
+    degrees: float, direction: str, expected_direction: str
+) -> None:
+    seen: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.url.params)
+        return httpx.Response(200, json=_envelope("rotate", {"success": True, "message": "moved"}))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = _adapter(client)
+
+    await adapter.move(MotorDirectiveDto(arm="left", degrees=degrees, direction=direction))
+
+    assert seen["rotations"] == str(abs(degrees) / 360.0)     # stepper takes abs() of it: the sign must not matter
+    assert float(seen["rotations"]) >= 0
+    assert seen["direction"] == expected_direction
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_business_failure_status_raises_rather_than_returning_a_value() -> None:
     # Stepper answers a business failure (e.g. unknown stepper_id) with HTTP 400, unlike
     # ai-agent's always-200 convention: the adapter follows Brain's general convention of

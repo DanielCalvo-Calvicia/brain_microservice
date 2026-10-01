@@ -45,7 +45,7 @@ The application layer depends on ports/interfaces. FastAPI, `httpx`, URLs, and H
 | STT | `http://127.0.0.1:8001` | Converts audio streams or audio bytes into text. |
 | TTS | `http://127.0.0.1:8002` | Converts text into audio streams. |
 | Speaker | `http://127.0.0.1:8003` | Plays audio streams. |
-| ai-agent | `http://127.0.0.1:7998` | Decides what to do with transcribed text (`AIAgentPort`/`HttpAIAgentAdapter`, session lifecycle). Called once per `run_voice_pipeline()` invocation; never exercised against a real ai-agent process (verified with fakes/mocks only). |
+| ai-agent | `http://127.0.0.1:7998` | Decides what to do with transcribed text. Two flows, each with its own routes and session: conversation-flow (`AIAgentPort`/`HttpAIAgentAdapter`: the reply) and motion-flow (`MotionAgentPort`/`HttpMotionAgentAdapter`: the arm movements). Called once per utterance; never exercised against a real ai-agent process (verified with fakes/mocks only). |
 | stepper | `http://127.0.0.1:8005` | Moves the arms (`StepperPort`/`HttpStepperAdapter`). Only Brain may call it; never exercised against real hardware. |
 
 ## 3. Architecture
@@ -72,15 +72,16 @@ FastApiAdapter
       -> STTPort       -> HttpSTTAdapter
       -> TTSPort       -> HttpTTSAdapter
       -> SpeakerPort   -> HttpSpeakerAdapter
-      -> AIAgentPort   -> HttpAIAgentAdapter   (called from Step9; see below)
-      -> StepperPort   -> HttpStepperAdapter   (called from Step9 on a movement decision; see below)
+      -> AIAgentPort   -> HttpAIAgentAdapter   (ai-agent's conversation-flow: the reply; called from the STT-to-TTS route via `decide()`)
+      -> MotionAgentPort -> HttpMotionAgentAdapter (ai-agent's motion-flow: which arm movements; same service, its own routes)
+      -> StepperPort   -> HttpStepperAdapter   (called from the STT-to-TTS route on a movement decision; see below)
 ```
 
-Since 2026-09-22, `application/services/steps/stream_internal/step9_stt_to_tts.py` calls `BrainService.ask_ai_agent()` instead of echoing STT text straight to TTS. It accumulates STT `completed` utterances until either the STT stream ends or `max_text_segments` have arrived (0, the default used by the startup pipeline, means unlimited: wait for the stream to end, which may be the whole service lifetime), then asks ai-agent **once** with everything accumulated. Only ai-agent's reply — never the raw STT text — reaches TTS. A session is attempted at Brain's own startup on a best-effort basis (its failure never stops Brain from starting) and is otherwise established lazily, with automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only, so they don't survive its own restarts). If `ask_ai_agent()` itself raises (ai-agent unreachable), Step9 falls back to a fixed apology — a soft failure ai-agent recovers from on its own already arrives as a speakable apology in `response`, so this fallback is a last resort.
+Since 2026-09-22, `application/services/routes/stream_internal/stt_to_tts.py` calls `BrainService.ask_ai_agent()` instead of echoing STT text straight to TTS. Since 2026-09-29 it decides **once per STT `completed` event** (STT's own silence detection marks each utterance boundary), not once per pipeline run: for each utterance `BrainService.decide()` asks ai-agent's motion-flow first (which movements, or which detail is missing) and then its conversation-flow (the reply, told what the robot does through `robot_context`), and speaks that one reply, then keeps listening for the next utterance — repeating for as long as the STT stream stays open (the whole service lifetime for the startup pipeline, since the microphone is never stopped except at shutdown). `max_text_segments` (0 = unlimited) only caps how many of those decisions get made, for bounded/test runs; production leaves it at 0. Only ai-agent's reply — never the raw STT text — reaches TTS. When motion-flow is asking the user for a missing detail (`awaiting_user_input`) its question is spoken as it is and conversation-flow is not asked; the user's answer is the next utterance, which goes to motion-flow first like every other one. A motion-flow failure never stops the conversation (nothing moves for that utterance); a conversation-flow failure never cancels an accepted movement (the apology is spoken and the arm still moves). A session is attempted at Brain's own startup on a best-effort basis (its failure never stops Brain from starting) and is otherwise established lazily, with automatic reconnect on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only, so they don't survive its own restarts). If `ask_ai_agent()` itself raises (ai-agent unreachable), the route falls back to a fixed apology — a soft failure ai-agent recovers from on its own already arrives as a speakable apology in `response`, so this fallback is a last resort.
 
-When the decision includes a movement directive, `BrainService.move_arm()` is dispatched as an independent, fire-and-forget `asyncio.create_task` — deliberately **not** `context.create_task`/`VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires as soon as this run's TTS/speaker work finishes, which can be faster than a real HTTP round trip to stepper; a move tied to that would get cancelled in the normal, successful case, not just on shutdown. It never blocks or fails the spoken reply. ai-agent's `MotorDirectiveDto` only says `arm: "left"|"right"`, `degrees`, `direction` — it has no idea what stepper's own `stepper_id`s are (that's stepper's own `STEPPER_CONFIGS`), so `HttpStepperAdapter` is the one place that maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full revolutions, and applies a fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). `move_arm()` never raises on a failed or refused move — it returns `StepperMoveResponseDto(success=False, ...)` instead, since the caller already has ai-agent's spoken reply regardless of whether the physical move succeeds.
+When the decision includes movements (a sequence, in order; `degrees` is signed, so left 90 then left -90 returns the arm), `BrainService.move_arms()` is dispatched as an independent, fire-and-forget `asyncio.create_task` — deliberately **not** `context.create_task`/`VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires as soon as this run's TTS/speaker work finishes, which can be faster than a real HTTP round trip to stepper; a move tied to that would get cancelled in the normal, successful case, not just on shutdown. It never blocks or fails the spoken reply. ai-agent's `MotorDirectiveDto` only says `arm: "left"|"right"`, `degrees`, `direction` — it has no idea what stepper's own `stepper_id`s are (that's stepper's own `STEPPER_CONFIGS`), so `HttpStepperAdapter` is the one place that maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full revolutions (stepper only reads the size of `rotations`, so a negative number of degrees is sent as the same rotation in the opposite direction), and applies a fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). `move_arm()` never raises on a failed or refused move — it returns `StepperMoveResponseDto(success=False, ...)` instead, since the caller already has ai-agent's spoken reply regardless of whether the physical move succeeds. `move_arms()` runs a sequence one movement after the other and stops at the first one that fails: going on would leave the arm somewhere the sequence did not intend.
 
-**This has never been exercised against a real ai-agent process or real stepper hardware** — only `contracts/tests/e2e` (real STT/TTS/speaker processes, fake ai-agent/stepper) and Brain's own mocked test suite. A real multi-turn conversation (one ai-agent call per utterance, not per pipeline invocation) is a bigger, separate change — not done here.
+**This has never been exercised against a real ai-agent process or real stepper hardware** — only `contracts/tests/e2e` (real STT/TTS/speaker processes, fake ai-agent/stepper) and Brain's own mocked test suite.
 
 ## 4. HTTP API
 
@@ -158,27 +159,27 @@ Wire formats:
 
 ## 5. Voice Pipeline
 
-The full voice pipeline is implemented by `application/services/pipeline.py` and isolated step files under `application/services/steps/`.
+The full voice pipeline is implemented by `application/services/pipeline.py` and isolated route files under `application/services/routes/`. Each route is an independent connection between two microservices' streams (mic->STT, STT->TTS, TTS->speaker, ...), not a fixed algorithmic step — "route" names that; see `application/services/ROUTE_INDEX.md`.
 
-`VoicePipelineFlow` runs all 10 steps once in order. The SET and GET streams are opened during setup, before the user speaks. The pipeline then waits for live streams to complete naturally, or stays alive when upstream streams stay open. On shutdown, background tasks are cancelled via `cancel_pending_tasks()`.
+`VoicePipelineFlow` runs all 10 routes once in order. The SET and GET streams are opened during setup, before the user speaks. The pipeline then waits for live streams to complete naturally, or stays alive when upstream streams stay open. On shutdown, background tasks are cancelled via `cancel_pending_tasks()`.
 
-Step order:
+Route order:
 
-| Step | File | Responsibility |
+| Order | File | Responsibility |
 | --- | --- | --- |
-| 1 | `steps/health_check/step1_health_check.py` | Check all required integrations. |
-| 2 | `steps/stream_get/step2_get_mic_stream.py` | Open the microphone stream. |
-| 3 | `steps/stream_set/step3_set_stt_stream.py` | Start STT SET from the STT input connector. |
-| 4 | `steps/stream_get/step4_get_stt_stream.py` | Open STT GET for text output. |
-| 5 | `steps/stream_set/step5_set_tts_stream.py` | Start TTS SET from the TTS input connector. |
-| 6 | `steps/stream_get/step6_get_tts_stream.py` | Open TTS GET for audio output. |
-| 7 | `steps/stream_set/step7_set_speaker_stream.py` | Start speaker playback from the speaker input connector. |
-| 8 | `steps/stream_internal/step8_mic_to_stt.py` | Bridge microphone output through the internal `mic-to-stt-audio` pipe into STT. |
-| 9 | `steps/stream_internal/step9_stt_to_tts.py` | Bridge STT text output through the internal `stt-to-tts-text` pipe into TTS. |
-| 10 | `steps/stream_internal/step10_tts_to_speaker.py` | Bridge TTS audio output through the internal `tts-to-speaker-audio` pipe into speaker. |
+| 1 | `routes/health_check/health_check.py` | Check all required integrations. |
+| 2 | `routes/stream_get/get_mic_stream.py` | Open the microphone stream. |
+| 3 | `routes/stream_set/set_stt_stream.py` | Start STT SET from the STT input connector. |
+| 4 | `routes/stream_get/get_stt_stream.py` | Open STT GET for text output. |
+| 5 | `routes/stream_set/set_tts_stream.py` | Start TTS SET from the TTS input connector. |
+| 6 | `routes/stream_get/get_tts_stream.py` | Open TTS GET for audio output. |
+| 7 | `routes/stream_set/set_speaker_stream.py` | Start speaker playback from the speaker input connector. |
+| 8 | `routes/stream_internal/mic_to_stt.py` | Bridge microphone output through the internal `mic-to-stt-audio` pipe into STT. |
+| 9 | `routes/stream_internal/stt_to_tts.py` | Bridge STT text output through the internal `stt-to-tts-text` pipe into TTS. |
+| 10 | `routes/stream_internal/tts_to_speaker.py` | Bridge TTS audio output through the internal `tts-to-speaker-audio` pipe into speaker. |
 
 
-Cross-step state moves through `VoicePipelineContext`; steps do not call each other directly. Internal bridge steps own the source stream, destination stream, and `AsyncStreamPipe` for each boundary: mic-to-STT audio, STT-to-TTS text, and TTS-to-speaker audio. Each internal pipe carries standard stream events, and each `completed` event includes the full text or audio output.
+Cross-route state moves through `VoicePipelineContext`; routes do not call each other directly. Internal bridge routes own the source stream, destination stream, and `AsyncStreamPipe` for each boundary: mic-to-STT audio, STT-to-TTS text, and TTS-to-speaker audio. Each internal pipe carries standard stream events, and each `completed` event includes the full text or audio output.
 
 The pipeline is started in the background during service startup. `POST /voice/pipeline` starts a new instance as a background task and returns `{"started": true}` immediately.
 
@@ -243,11 +244,14 @@ TTS_STREAM_ENDPOINT=/process/stream/get
 SPEAKER_BASE_URL=http://127.0.0.1:8003
 SPEAKER_PLAY_STREAM_ENDPOINT=/process/stream/set
 
-# Not called by the live voice pipeline yet (planned).
+# ai-agent hosts two flows with their own routes: conversation-flow (the reply) and motion-flow (the movements).
 AI_AGENT_BASE_URL=http://127.0.0.1:7998
-AI_AGENT_START_SESSION_ENDPOINT=/session/start
-AI_AGENT_MESSAGE_ENDPOINT=/session/message
-AI_AGENT_END_SESSION_ENDPOINT=/session/end
+AI_AGENT_START_SESSION_ENDPOINT=/conversation-flow/session/start
+AI_AGENT_MESSAGE_ENDPOINT=/conversation-flow/session/message
+AI_AGENT_END_SESSION_ENDPOINT=/conversation-flow/session/end
+AI_AGENT_MOTION_START_SESSION_ENDPOINT=/motion-flow/session/start
+AI_AGENT_MOTION_MESSAGE_ENDPOINT=/motion-flow/session/message
+AI_AGENT_MOTION_END_SESSION_ENDPOINT=/motion-flow/session/end
 
 # Not called by the live voice pipeline yet (planned). ai-agent only says "left"/"right"; these
 # map that to the stepper_id stepper itself is configured with (its own STEPPER_CONFIGS).
@@ -354,7 +358,7 @@ Live tests are skipped by default unless `RUN_LIVE_MICROSERVICE_TESTS=1` is set.
 | `composition_root/` | Config loading, dependency wiring, startup preflight, and server setup. |
 | `application/services/service.py` | Public `BrainService` facade for health, STT, TTS, transcription, and pipeline use cases. |
 | `application/services/pipeline.py` | Full voice pipeline executor. |
-| `application/services/steps/` | Isolated pipeline steps. |
+| `application/services/routes/` | Isolated pipeline routes. |
 | `application/ports/` | Application port interfaces. |
 | `application/dtos/` | Inbound, service, and outbound DTOs plus mappers. |
 | `infrastructure/inbound/http/` | FastAPI adapter and route registration. |

@@ -1,6 +1,16 @@
 from dataclasses import dataclass
 
+from application.dtos.outbound_dtos import MotorDirectiveDto
 from domain.models import ServiceStatus
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDecisionDto:
+    """What Brain does for one utterance: what to say (``None`` when conversation-flow could not be reached,
+    so the caller speaks its own apology) and the movements to run in order (possibly none)."""
+
+    reply: str | None
+    directives: tuple[MotorDirectiveDto, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

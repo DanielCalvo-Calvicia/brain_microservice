@@ -11,6 +11,8 @@ from application.dtos.outbound_dtos import (
     ExternalHealthResponseDto,
     MicrophoneStreamRequestDto,
     MicrophoneStreamResponseDto,
+    MotionMessageRequestDto,
+    MotionMessageResponseDto,
     MotorDirectiveDto,
     SpeakerPlaybackRequestDto,
     SpeakerPlaybackResponseDto,
@@ -26,7 +28,7 @@ from application.dtos.outbound_dtos import (
     TTSTextStreamRequestDto,
 )
 from application.services.service import BrainService
-from application.services.steps.stream_internal.external_events import ndjson_events
+from application.services.routes.stream_internal.external_events import ndjson_events
 from contracts.stream.codec import EventSequencer, encode_ndjson, encode_sse
 from contracts.stream.common.base import EventType
 from contracts.stream.common.start_stream import StartStreamEvent
@@ -232,13 +234,11 @@ class DiagnosticAIAgent:
         available: bool = True,
         session_id: str = "diagnostic-session",
         response: str | None = "diagnostic reply",
-        directive: MotorDirectiveDto | None = None,
         error_code: str | None = None,
     ) -> None:
         self.available = available
         self.session_id = session_id
         self.response = response
-        self.directive = directive
         self.error_code = error_code
         self.start_requests: list[AIAgentStartSessionRequestDto] = []
         self.message_requests: list[AIAgentMessageRequestDto] = []
@@ -260,7 +260,6 @@ class DiagnosticAIAgent:
         return AIAgentMessageResponseDto(
             success=self.error_code is None,
             response=self.response if self.response is not None else request.message,
-            directive=self.directive,
             error_code=self.error_code,
         )
 
@@ -268,6 +267,46 @@ class DiagnosticAIAgent:
         self.end_requests.append(request)
         return AIAgentEndSessionResponseDto(success=True, message="Session ended successfully.")
 
+
+class DiagnosticMotionAgent:
+    """motion-flow of ai-agent. ``directives`` is what it decides for every message (empty = no movement);
+    ``awaiting_user_input`` makes it answer with a question instead; ``response`` is that question or a refusal."""
+
+    def __init__(
+        self,
+        *,
+        session_id: str = "diagnostic-motion-session",
+        directives: tuple[MotorDirectiveDto, ...] = (),
+        response: str = "",
+        awaiting_user_input: bool = False,
+        error_code: str | None = None,
+    ) -> None:
+        self.session_id = session_id
+        self.directives = directives
+        self.response = response
+        self.awaiting_user_input = awaiting_user_input
+        self.error_code = error_code
+        self.start_requests: list[AIAgentStartSessionRequestDto] = []
+        self.message_requests: list[MotionMessageRequestDto] = []
+        self.end_requests: list[AIAgentEndSessionRequestDto] = []
+
+    async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
+        self.start_requests.append(request)
+        return AIAgentStartSessionResponseDto(success=True, session_id=self.session_id, message="Session started successfully.")
+
+    async def message(self, request: MotionMessageRequestDto) -> MotionMessageResponseDto:
+        self.message_requests.append(request)
+        return MotionMessageResponseDto(
+            success=self.error_code is None,
+            response=self.response,
+            directives=self.directives,
+            awaiting_user_input=self.awaiting_user_input,
+            error_code=self.error_code,
+        )
+
+    async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:
+        self.end_requests.append(request)
+        return AIAgentEndSessionResponseDto(success=True, message="Session ended successfully.")
 
 class DiagnosticStepper:
     def __init__(self, *, available: bool = True, success: bool = True, message: str = "moved") -> None:
@@ -295,6 +334,7 @@ def build_brain_service(
     speaker: DiagnosticSpeaker | None = None,
     ai_agent: DiagnosticAIAgent | None = None,
     stepper: DiagnosticStepper | None = None,
+    motion_agent: DiagnosticMotionAgent | None = None,
 ) -> BrainService:
     return BrainService(
         microphone or DiagnosticMicrophone(),
@@ -303,6 +343,7 @@ def build_brain_service(
         speaker or DiagnosticSpeaker(),
         ai_agent or DiagnosticAIAgent(),
         stepper or DiagnosticStepper(),
+        motion_agent,
     )
 
 

@@ -7,7 +7,7 @@ from contracts.stream.microservices.tts.inbound.completed import (
 )
 from shared_logging.testing import capture
 
-from application.services.steps.stream_internal.external_events import (
+from application.services.routes.stream_internal.external_events import (
     ndjson_events,
     stage_encoder,
     text_stream_as_ndjson_events,

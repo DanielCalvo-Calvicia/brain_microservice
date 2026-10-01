@@ -1,6 +1,7 @@
 from application.services.service import BrainService
 from composition_root.config import load_config
 from infrastructure.outbound.http.ai_agent.ai_agent_adapter import HttpAIAgentAdapter
+from infrastructure.outbound.http.ai_agent.motion_agent_adapter import HttpMotionAgentAdapter
 from infrastructure.outbound.http.base import HttpServiceConfig
 from infrastructure.outbound.http.microphone.microphone_adapter import HttpMicrophoneAdapter
 from infrastructure.outbound.http.speaker.speaker_adapter import HttpSpeakerAdapter
@@ -47,6 +48,12 @@ class LiveMicroservices:
             message_endpoint=config.ai_agent_message_endpoint,
             end_session_endpoint=config.ai_agent_end_session_endpoint,
         )
+        self.motion_agent_adapter = HttpMotionAgentAdapter(
+            HttpServiceConfig("ai_agent", config.ai_agent_base_url, config.provider_timeout_seconds),
+            start_session_endpoint=config.ai_agent_motion_start_session_endpoint,
+            message_endpoint=config.ai_agent_motion_message_endpoint,
+            end_session_endpoint=config.ai_agent_motion_end_session_endpoint,
+        )
         self.stepper_adapter = HttpStepperAdapter(
             HttpServiceConfig("stepper", config.stepper_base_url, config.provider_timeout_seconds),
             left_arm_stepper_id=config.stepper_left_arm_stepper_id,
@@ -61,6 +68,7 @@ class LiveMicroservices:
             self.speaker_adapter,
             self.ai_agent_adapter,
             self.stepper_adapter,
+            self.motion_agent_adapter,
         )
 
     async def close(self) -> None:
@@ -69,4 +77,5 @@ class LiveMicroservices:
         await self.tts_adapter.close()
         await self.speaker_adapter.close()
         await self.ai_agent_adapter.close()
+        await self.motion_agent_adapter.close()
         await self.stepper_adapter.close()

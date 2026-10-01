@@ -14,7 +14,7 @@ from tests.shared.fakes import (
 )
 import base64
 
-from application.services.steps.stream_internal.external_events import ndjson_events
+from application.services.routes.stream_internal.external_events import ndjson_events
 from contracts.stream.schemas import STT_INBOUND
 
 

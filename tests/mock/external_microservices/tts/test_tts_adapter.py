@@ -6,7 +6,7 @@ import pytest
 from application.dtos.outbound_dtos import TTSAudioStreamRequestDto, TTSSetStreamRequestDto, TTSTextStreamRequestDto
 from infrastructure.outbound.http.base import HttpServiceConfig
 from infrastructure.outbound.http.tts.tts_adapter import HttpTTSAdapter
-from application.services.steps.stream_internal.external_events import text_stream_as_ndjson_events
+from application.services.routes.stream_internal.external_events import text_stream_as_ndjson_events
 from tests.shared.wire import stream_event_bytes
 from tests.shared.streams import byte_stream
 

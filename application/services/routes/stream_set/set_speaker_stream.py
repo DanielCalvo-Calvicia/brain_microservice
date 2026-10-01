@@ -9,13 +9,13 @@ from ..context import AsyncStreamPipe, VoicePipelineContext, verify_speaker_inpu
 logger = get_logger(__name__)
 
 
-class Step7SetSpeakerStream:
+class SetSpeakerStream:
     def __init__(self, speaker_port: SpeakerPort) -> None:
         self.speaker_port = speaker_port
 
     async def run(self, context: VoicePipelineContext) -> None:
         request = context.request
-        logger.info("pipeline step 7: setting speaker input stream connector")
+        logger.info("pipeline route: setting speaker input stream connector")
         speaker_stream_in_pipe = AsyncStreamPipe[bytes]("speaker-stream-in")
         context.speaker_stream_in_pipe = speaker_stream_in_pipe
         speaker_input = SpeakerPlaybackRequestDto(

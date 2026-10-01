@@ -28,7 +28,7 @@ from .external_events import ndjson_events, raise_for_stream_error, stage_encode
 logger = get_logger(__name__)
 
 
-class Step8MicStreamToInternalStreamToSTTStream:
+class MicStreamToInternalStreamToSTTStream:
     """Microphone outbound events -> (internal stream of STT inbound events) -> STT input.
 
     The audio bytes are never touched: both contracts carry raw PCM16 in ``bytes_base64``, so
