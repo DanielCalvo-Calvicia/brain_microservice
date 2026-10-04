@@ -10,6 +10,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "linux": { "python": "${workspaceFolder}/windows/bin/python" },
             "env": {
                 "APP_ENV": "development",
                 "VSCODE_LAUNCH_PROFILE": "Python: Debug (development env)"
@@ -24,6 +25,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "linux": { "python": "${workspaceFolder}/windows/bin/python" },
             "env": {
                 "APP_ENV": "staging",
                 "VSCODE_LAUNCH_PROFILE": "Python: Run (staging env)"
@@ -38,6 +40,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "linux": { "python": "${workspaceFolder}/windows/bin/python" },
             "env": {
                 "APP_ENV": "production",
                 "VSCODE_LAUNCH_PROFILE": "Python: Run (production env)"
@@ -52,6 +55,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "linux": { "python": "${workspaceFolder}/windows/bin/python" },
             "args": [
                 "tests/mock",
                 "-vv"
@@ -70,6 +74,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "linux": { "python": "${workspaceFolder}/windows/bin/python" },
             "args": [
                 "tests/live",
                 "-vv"
@@ -92,6 +97,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/windows/Scripts/python.exe",
+            "linux": { "python": "${workspaceFolder}/windows/bin/python" },
             "env": {
                 "APP_ENV": "development",
                 "PYTHONPATH": "${workspaceFolder}",
