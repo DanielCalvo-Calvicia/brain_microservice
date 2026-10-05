@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from domain.operations.wake_phrase import WakePhrase, has_words, strip_wake_phrase, find_wake_phrase
+from domain.operations.wake_phrase import WakePhrase, find_wake_phrase, has_words, is_noise_transcript, strip_wake_phrase
 from domain.value_objects.wake_phrase_settings import WakePhraseSettings
 
 
@@ -40,6 +40,8 @@ class WakeGate:
             self._open_until = now + self.settings.followup_seconds
             return WakeDecision(WakeVerdict.ACKNOWLEDGE)
         if self._open_until > 0.0 and now <= self._open_until:
+            if is_noise_transcript(heard):
+                return WakeDecision(WakeVerdict.IGNORE)  # noise is not the answer: the window stays open for it
             self._open_until = 0.0
             return WakeDecision(WakeVerdict.ANSWER, heard.strip())
         self._open_until = 0.0

@@ -86,3 +86,12 @@ def test_the_answer_window_closes_after_its_time_and_can_be_turned_off() -> None
     off = WakeGate(WakePhraseSettings(phrase="Oblivion 306", answer_seconds=0.0))
     off.open_for_answer(now=0.0)
     assert off.evaluate("ninety degrees", now=1.0).verdict is WakeVerdict.IGNORE
+
+
+def test_noise_made_up_by_the_engine_does_not_use_up_an_open_window() -> None:
+    gate = WakeGate(WakePhraseSettings(phrase="Oblivion 306", answer_seconds=30.0))
+    gate.open_for_answer(now=0.0)
+
+    assert gate.evaluate("Thanks for watching!", now=5.0).verdict is WakeVerdict.IGNORE
+    assert gate.evaluate("you", now=6.0).verdict is WakeVerdict.IGNORE
+    assert gate.evaluate("ninety degrees", now=10.0) == WakeDecision(WakeVerdict.ANSWER, "ninety degrees")

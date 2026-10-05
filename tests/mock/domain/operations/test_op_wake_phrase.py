@@ -1,6 +1,6 @@
 import pytest
 
-from domain.operations.wake_phrase import WakePhrase, find_wake_phrase, has_words, strip_wake_phrase
+from domain.operations.wake_phrase import WakePhrase, find_wake_phrase, has_words, is_noise_transcript, strip_wake_phrase
 
 PHRASE = WakePhrase.parse("Oblivion 306")
 
@@ -91,3 +91,13 @@ def test_has_words_ignores_punctuation() -> None:
     assert has_words("wave") is True
     assert has_words("  ...,  ") is False
     assert has_words("") is False
+
+
+@pytest.mark.parametrize("heard", ["Thanks for watching!", "Thank you for watching.", "you", " Thank you. ", "Bye!"])
+def test_what_an_engine_makes_up_from_noise_is_recognised(heard: str) -> None:
+    assert is_noise_transcript(heard) is True
+
+
+@pytest.mark.parametrize("heard", ["ninety degrees", "yes", "thank you for the arm", "", "Oblivion 306"])
+def test_real_speech_is_not_noise(heard: str) -> None:
+    assert is_noise_transcript(heard) is False

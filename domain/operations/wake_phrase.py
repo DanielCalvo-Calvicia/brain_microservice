@@ -106,6 +106,26 @@ def strip_wake_phrase(text: str, phrase: WakePhrase, name_similarity: float = 0.
     return rest.lstrip(" ,.;:!?-").strip()
 
 
+# What speech engines write for background noise and silence: not something anybody said to the robot
+_NOISE_PHRASES = {
+    "you",
+    "bye",
+    "bye bye",
+    "thanks",
+    "thank you",
+    "thank you so much",
+    "thanks for watching",
+    "thank you for watching",
+    "thank you for watching and see you next time",
+}
+
+
+def is_noise_transcript(text: str) -> bool:
+    """Whether ``text`` is only what an engine makes up from noise ("Thanks for watching!", "you"): nobody said it."""
+    words = " ".join(match.group().lower() for match in _TOKEN.finditer(text))
+    return words in _NOISE_PHRASES
+
+
 def has_words(text: str) -> bool:
     """Whether there is anything to say in ``text`` besides punctuation."""
     return _TOKEN.search(text) is not None
