@@ -21,7 +21,7 @@ STARTED = {"message": "Microphone stream started", "sample_rate": 44100, "channe
 EVENTS = b"".join(
     [
         stream_event_bytes("stream_started", 1, STARTED),
-        stream_event_bytes("partial", 2, {"bytes_base64": "bWljLWF1ZGlv"}),
+        stream_event_bytes("utterance", 2, {"bytes_base64": "bWljLWF1ZGlv", "sample_rate": 44100}),
         stream_event_bytes("completed", 3, {"reason": "completed", "output_bytes_base64": ""}),
     ]
 )

@@ -16,18 +16,11 @@ class SetSTTStream:
         self.stt_port = stt_port
 
     async def run(self, context: VoicePipelineContext) -> None:
-        request = context.request
-        microphone_output = context.require_microphone_output()
+        context.require_microphone_output()  # the microphone stream must be open before STT is fed
         logger.info("pipeline route: setting STT input stream connector")
         stt_stream_in_pipe = AsyncStreamPipe[bytes]("stt-stream-in")
         context.stt_stream_in_pipe = stt_stream_in_pipe
-        stt_input = STTSetStreamRequestDto(
-            audio_stream=stt_stream_in_pipe.stream,
-            sample_rate=microphone_output.sample_rate,
-            chunk_size=request.microphone_chunk_size,
-            silence_threshold=request.stt_silence_threshold,
-            silence_limit_seconds=request.stt_silence_limit_seconds,
-        )
+        stt_input = STTSetStreamRequestDto(audio_stream=stt_stream_in_pipe.stream)
         verify_stt_input(stt_input)
         context.stt_input = stt_input
         task = context.create_task(self.stt_port.set_stream(stt_input), "STT input")

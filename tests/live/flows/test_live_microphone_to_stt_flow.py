@@ -4,7 +4,7 @@ from contextlib import suppress
 
 import pytest
 
-from application.dtos.outbound_dtos import MicrophoneStreamRequestDto, STTSetStreamRequestDto, STTTextStreamRequestDto
+from application.dtos.outbound_dtos import MicrophoneStreamRequestDto, STTSetStreamRequestDto
 from tests.shared.live_microservices import LiveMicroservices
 
 
@@ -36,23 +36,12 @@ async def test_live_microphone_to_stt_flow_opens_text_stream_from_real_microphon
             live.stt_adapter.set_stream(
                 STTSetStreamRequestDto(
                     audio_stream=microphone_output.audio_stream,
-                    sample_rate=microphone_output.sample_rate,
-                    chunk_size=1024,
-                    silence_threshold=150,
-                    silence_limit_seconds=0.5,
                 )
             )
         )
         await asyncio.sleep(0.1)
 
-        stt_output = await live.stt_adapter.get_stream(
-            STTTextStreamRequestDto(
-                sample_rate=microphone_output.sample_rate,
-                chunk_size=1024,
-                silence_threshold=150,
-                silence_limit_seconds=0.5,
-            )
-        )
+        stt_output = await live.stt_adapter.get_stream()
         event_count = await _drain_text_stream_until_closed(stt_output.text_stream)
         print(
             f"[live mic->stt] STT SSE stream closed after {event_count} text events; "

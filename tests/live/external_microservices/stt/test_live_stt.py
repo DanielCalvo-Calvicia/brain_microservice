@@ -3,8 +3,8 @@ import asyncio
 
 import pytest
 
-from application.dtos.outbound_dtos import STTSetStreamRequestDto, STTTextStreamRequestDto
-from tests.shared.stream_probes import finite_silence_audio_stream
+from application.dtos.outbound_dtos import STTSetStreamRequestDto
+from tests.shared.stream_probes import finite_utterance_events
 from tests.shared.live_microservices import LiveMicroservices
 
 
@@ -21,16 +21,12 @@ async def test_live_stt_stream_accepts_audio_and_completes() -> None:
         input_task = asyncio.create_task(
             live.stt_adapter.set_stream(
                 STTSetStreamRequestDto(
-                    audio_stream=finite_silence_audio_stream(sample_rate=16000, seconds=1),
-                    sample_rate=16000,
-                    chunk_size=1024,
-                    silence_threshold=150,
-                    silence_limit_seconds=0.2,
+                    audio_stream=finite_utterance_events(sample_rate=16000, seconds=1),
                 )
             )
         )
         await asyncio.sleep(0.1)
-        response = await live.stt_adapter.get_stream(STTTextStreamRequestDto(sample_rate=16000))
+        response = await live.stt_adapter.get_stream()
         texts = [text async for text in response.text_stream]
         await input_task
     finally:

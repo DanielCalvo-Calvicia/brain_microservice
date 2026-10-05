@@ -114,8 +114,6 @@ class FastApiAdapter:
         async def transcribe_microphone(
             sample_rate: int = Query(16000),
             chunk_size: int = Query(1024),
-            silence_threshold: int = Query(150),
-            silence_limit_seconds: float = Query(2.0),
             max_segments: int = Query(1),
         ) -> JSONResponse:
             try:
@@ -129,8 +127,6 @@ class FastApiAdapter:
                     MicrophoneTranscriptionRequestDto(
                         sample_rate=sample_rate,
                         chunk_size=chunk_size,
-                        silence_threshold=silence_threshold,
-                        silence_limit_seconds=silence_limit_seconds,
                         max_segments=max_segments,
                     )
                 )
@@ -151,8 +147,6 @@ class FastApiAdapter:
         async def run_voice_pipeline(
             microphone_sample_rate: int = Query(16000),
             microphone_chunk_size: int = Query(1024),
-            stt_silence_threshold: int = Query(150),
-            stt_silence_limit_seconds: float = Query(2.0),
             max_text_segments: int = Query(0),
             tts_sample_rate: int = Query(24000),
             speaker_channels: int = Query(1),
@@ -168,8 +162,6 @@ class FastApiAdapter:
                     VoicePipelineRequestDto(
                         microphone_sample_rate=microphone_sample_rate,
                         microphone_chunk_size=microphone_chunk_size,
-                        stt_silence_threshold=stt_silence_threshold,
-                        stt_silence_limit_seconds=stt_silence_limit_seconds,
                         max_text_segments=max_text_segments,
                         tts_sample_rate=tts_sample_rate,
                         speaker_channels=speaker_channels,

@@ -56,7 +56,7 @@ FastApiAdapter
 
 Every business rule lives in `domain/` (standard library only): the flow chain, degrees to rotation, format checks, text splitting, health rules. Layer rules are enforced by `tests/mock/test_layout.py`.
 
-**Deciding for an utterance.** The STT-to-TTS bridge (`application/services/voice_pipeline/bridges/stt_to_tts.py`) decides **once per STT `completed` event** (STT's own silence detection marks utterance boundaries) and keeps listening for the next one for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). Per utterance `BrainService.decide()` asks the flows **one after the other, each only when the one before has ended**: conversation-flow writes the reply, motion-flow, last, decides the movements. What each flow says is spoken in order. A flow that asks the user a question (`awaiting_user_input`) stops the chain, and the next utterance, its answer, goes only to that flow. A flow that cannot be reached is skipped; if none can be reached Brain speaks a fixed apology. Only ai-agent's words, never the raw STT text, reach TTS. `max_text_segments` (0 = unlimited) only caps how many decisions a run makes (bounded runs and tests).
+**Deciding for an utterance.** The STT-to-TTS bridge (`application/services/voice_pipeline/bridges/stt_to_tts.py`) decides **once per STT `completed` event** (the microphone's silence detection marks utterance boundaries: it sends one `utterance` event per utterance and STT only transcribes it) and keeps listening for the next one for as long as the STT stream stays open (the whole service lifetime for the startup pipeline). Per utterance `BrainService.decide()` asks the flows **one after the other, each only when the one before has ended**: conversation-flow writes the reply, motion-flow, last, decides the movements. What each flow says is spoken in order. A flow that asks the user a question (`awaiting_user_input`) stops the chain, and the next utterance, its answer, goes only to that flow. A flow that cannot be reached is skipped; if none can be reached Brain speaks a fixed apology. Only ai-agent's words, never the raw STT text, reach TTS. `max_text_segments` (0 = unlimited) only caps how many decisions a run makes (bounded runs and tests).
 
 **What the user hears while ai-agent works** (`application/services/progress.py`): `message received` at once when an utterance arrives (`PROGRESS_RECEIVED_MESSAGE`), `thinking` every `PROGRESS_THINKING_INTERVAL_SECONDS` while the flows run (the first after one interval, so a quick answer stays quiet), and only when all flows have ended the answer and the movements.
 
@@ -74,8 +74,8 @@ Every business rule lives in `domain/` (standard library only): the flow chain, 
 | `GET` | `/integrations/health` | Microphone, STT, TTS, speaker availability: `data = {all_available, services: [{name, is_available, detail}]}` |
 | `POST` | `/stt/batch?sample_rate=16000` | Body: raw PCM; returns `{text}` |
 | `POST` | `/tts/play?sample_rate=24000&channels=1` | Body: UTF-8 text; synthesizes and plays it; returns `{success}` |
-| `POST` | `/voice/transcribe` | Query `sample_rate` (16000), `chunk_size` (1024), `silence_threshold` (150), `silence_limit_seconds` (2.0), `max_segments` (1); returns `{segments}` |
-| `POST` | `/voice/pipeline` | Query `microphone_sample_rate` (16000), `microphone_chunk_size` (1024), `stt_silence_threshold` (150), `stt_silence_limit_seconds` (2.0), `max_text_segments` (0), `tts_sample_rate` (24000), `speaker_channels` (1). Starts a pipeline as a background task and returns `{"started": true}` at once |
+| `POST` | `/voice/transcribe` | Query `sample_rate` (16000), `chunk_size` (1024), `max_segments` (1); returns `{segments}`. Silence detection is the microphone service's (`MICROPHONE_SILENCE_*`) |
+| `POST` | `/voice/pipeline` | Query `microphone_sample_rate` (16000), `microphone_chunk_size` (1024), `max_text_segments` (0), `tts_sample_rate` (24000), `speaker_channels` (1). Starts a pipeline as a background task and returns `{"started": true}` at once |
 
 Answers use the envelope `action / status / status_code / message / timestamp / data`; errors use `status: "error"` and `data: null`. Failures are `502` when an external service failed (`BrainMicroserviceError`) and `500` otherwise. Invalid pipeline settings fail before any stream opens (a `ValueError` naming the field, `500` on `/voice/pipeline`). There is no authentication.
 
@@ -105,7 +105,7 @@ Every stream the adapters consume or produce is a `contracts.stream` event strea
 | 5 | `steps/set_tts_stream.py` | Start the TTS upload from the TTS input pipe |
 | 6 | `steps/get_tts_stream.py` | Open TTS audio output |
 | 7 | `steps/set_speaker_stream.py` | Start speaker playback from the speaker input pipe |
-| 8 | `bridges/mic_to_stt.py` | Microphone audio into STT (checks the announced format) |
+| 8 | `bridges/mic_to_stt.py` | The microphone's utterances into STT, one event each (checks the announced format and rate) |
 | 9 | `bridges/stt_to_tts.py` | Per STT utterance: progress messages, `decide()`, the answer to TTS, movements to the stepper |
 | 10 | `bridges/tts_to_speaker.py` | TTS audio into the speaker (checks the announced format) |
 

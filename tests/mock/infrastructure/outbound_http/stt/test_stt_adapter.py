@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from application.dtos.outbound_dtos import STTBatchRequestDto, STTSetStreamRequestDto, STTTextStreamRequestDto
+from application.dtos.outbound_dtos import STTBatchRequestDto, STTSetStreamRequestDto
 from domain.errors import ExternalServiceUnavailableError
 from infrastructure.outbound.http.http_client import HttpServiceConfig
 from infrastructure.outbound.http.stt.stt_adapter import HttpSTTAdapter
@@ -52,10 +52,7 @@ async def test_stt_adapter_posts_audio_stream_input() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/process/stream/set"
-        assert request.url.params["sample_rate"] == "16000"
-        assert request.url.params["chunk_size"] == "1024"
-        assert request.url.params["silence_threshold"] == "150"
-        assert request.url.params["silence_limit_seconds"] == "2.0"
+        assert dict(request.url.params) == {}  # STT takes no settings: the microphone cut the utterances
         assert request.headers["content-type"] == "application/x-ndjson"
         events = _ndjson_events(await request.aread())
         assert len(events) == 3
@@ -80,7 +77,7 @@ async def test_stt_adapter_posts_audio_stream_input() -> None:
             stream_event_bytes("completed", 3, {"reason": "completed", "output_bytes_base64": "cGNt"}),
         ]
     )
-    await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((body,)), sample_rate=16000))
+    await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((body,))))
 
     await client.aclose()
 
@@ -104,8 +101,8 @@ async def test_stt_adapter_can_replace_decoupled_stream_with_second_set_request(
 
     first = stream_event_bytes("partial", 1, {"bytes_base64": "Zmlyc3Q="})
     second = stream_event_bytes("partial", 1, {"bytes_base64": "c2Vjb25k"})
-    await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((first,)), sample_rate=16000))
-    await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((second,)), sample_rate=16000))
+    await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((first,))))
+    await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((second,))))
 
     assert [_ndjson_events(body)[0]["payload"] for body in bodies] == [
         {"bytes_base64": "Zmlyc3Q="},
@@ -130,7 +127,7 @@ async def test_stt_adapter_requires_200_when_setting_stream() -> None:
     )
 
     with pytest.raises(ExternalServiceUnavailableError, match="expected HTTP 200"):
-        await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((b"pcm",)), sample_rate=16000))
+        await adapter.set_stream(STTSetStreamRequestDto(audio_stream=byte_stream((b"pcm",))))
 
     await client.aclose()
 
@@ -140,10 +137,7 @@ async def test_stt_adapter_gets_and_parses_sse_text_stream() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/process/stream/get"
-        assert request.url.params["sample_rate"] == "16000"
-        assert request.url.params["chunk_size"] == "2048"
-        assert request.url.params["silence_threshold"] == "200"
-        assert request.url.params["silence_limit_seconds"] == "0.75"
+        assert dict(request.url.params) == {}
         return httpx.Response(
             200,
             content=b"".join(
@@ -163,14 +157,7 @@ async def test_stt_adapter_gets_and_parses_sse_text_stream() -> None:
         client=client,
     )
 
-    response = await adapter.get_stream(
-        STTTextStreamRequestDto(
-            sample_rate=16000,
-            chunk_size=2048,
-            silence_threshold=200,
-            silence_limit_seconds=0.75,
-        )
-    )
+    response = await adapter.get_stream()
     texts = [chunk async for chunk in response.text_stream]
 
     assert b"hello" in b"".join(texts)
@@ -191,7 +178,7 @@ async def test_stt_adapter_rejects_legacy_raw_sse_text() -> None:
         client=client,
     )
 
-    response = await adapter.get_stream(STTTextStreamRequestDto())
+    response = await adapter.get_stream()
     body = b"".join([chunk async for chunk in response.text_stream])
     assert body == b"data: hello world\n\n"
 
@@ -219,7 +206,7 @@ async def test_stt_adapter_rejects_non_sequential_sse_events() -> None:
         client=client,
     )
 
-    response = await adapter.get_stream(STTTextStreamRequestDto())
+    response = await adapter.get_stream()
     body = b"".join([chunk async for chunk in response.text_stream])
     assert b"skipped" in body
 
@@ -241,7 +228,7 @@ async def test_stt_adapter_get_stream_before_set_surfaces_endpoint_not_found() -
     )
 
     with pytest.raises(ExternalServiceUnavailableError, match="endpoint not found"):
-        await adapter.get_stream(STTTextStreamRequestDto())
+        await adapter.get_stream()
 
     await client.aclose()
 
@@ -259,7 +246,7 @@ async def test_stt_adapter_treats_incomplete_chunked_close_as_stream_completion(
         client=client,
     )
 
-    response = await adapter.get_stream(STTTextStreamRequestDto())
+    response = await adapter.get_stream()
     with pytest.raises(ExternalServiceUnavailableError, match="incomplete chunked read"):
         [chunk async for chunk in response.text_stream]
     await client.aclose()

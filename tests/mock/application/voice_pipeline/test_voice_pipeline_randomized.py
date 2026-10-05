@@ -16,7 +16,6 @@ from application.dtos.outbound_dtos import (
     STTBatchResponseDto,
     STTSetStreamRequestDto,
     STTStreamResponseDto,
-    STTTextStreamRequestDto,
     TTSAudioStreamRequestDto,
     TTSAudioStreamResponseDto,
     TTSSetStreamRequestDto,
@@ -71,7 +70,7 @@ class AuditedMicrophone:
         for index, chunk in enumerate(self.chunks):
             self.events.append(f"microphone:emit:{index}")
             encoded = base64.b64encode(chunk).decode("ascii")
-            yield stream_event_bytes("partial", sequence, {"bytes_base64": encoded})
+            yield stream_event_bytes("utterance", sequence, {"bytes_base64": encoded, "sample_rate": 16000})
             sequence += 1
             yield stream_event_bytes(
                 "completed", sequence, {"reason": "completed", "output_bytes_base64": ""}
@@ -84,7 +83,7 @@ class AuditedSTT:
         self.text_chunks = text_chunks
         self.events = events
         self.stream_requests: list[STTSetStreamRequestDto] = []
-        self.get_requests: list[STTTextStreamRequestDto] = []
+        self.get_requests: list[bool] = []
         self.audio_chunks_received: list[bytes] = []
         self.batch_requests: list[STTBatchRequestDto] = []
         self._audio_complete = asyncio.Event()
@@ -96,7 +95,7 @@ class AuditedSTT:
         self.events.append("stt:start")
         self.stream_requests.append(request)
         async for event in ndjson_events(request.audio_stream, service_name="stt-test", schema=STT_INBOUND):
-            if event.type != "partial":
+            if event.type != "utterance":
                 continue
             chunk = base64.b64decode(event.payload.bytes_base64)
             self.events.append(f"stt:receive_audio:{len(self.audio_chunks_received)}")
@@ -104,9 +103,9 @@ class AuditedSTT:
         self.events.append("stt:audio_complete")
         self._audio_complete.set()
 
-    async def get_stream(self, request: STTTextStreamRequestDto) -> STTStreamResponseDto:
+    async def get_stream(self) -> STTStreamResponseDto:
         self.events.append("stt:get_text")
-        self.get_requests.append(request)
+        self.get_requests.append(True)
         return STTStreamResponseDto(text_stream=self._stream_text_sse())
 
     async def process_batch(self, request: STTBatchRequestDto) -> STTBatchResponseDto:
@@ -227,8 +226,6 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
         VoicePipelineServiceRequestDto(
             microphone_sample_rate=16000,
             microphone_chunk_size=1024,
-            stt_silence_threshold=150,
-            stt_silence_limit_seconds=0.5,
             max_text_segments=1,
             tts_sample_rate=24000,
             speaker_channels=1,
@@ -241,10 +238,6 @@ async def test_full_voice_pipeline_forwards_seeded_random_chunks_across_each_flo
 
     assert microphone.start_requests == [MicrophoneStreamRequestDto(sample_rate=16000, chunk_size=1024)]
     assert microphone.stop_count == 0
-    assert stt.stream_requests[0].sample_rate == 16000
-    assert stt.stream_requests[0].chunk_size == 1024
-    assert stt.stream_requests[0].silence_threshold == 150
-    assert stt.stream_requests[0].silence_limit_seconds == 0.5
     assert tuple(stt.audio_chunks_received) == microphone_chunks
 
     assert ai_agent.last_message.message == expected_ai_agent_input.strip()  # route9 strips each utterance

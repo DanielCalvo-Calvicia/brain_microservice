@@ -75,7 +75,7 @@ know which comes next; all shared state moves through the context.
 | 5 | `steps/set_tts_stream.py` | starts the TTS upload; wraps the text with `CountedTextStream` |
 | 6 | `steps/get_tts_stream.py` | opens TTS audio output |
 | 7 | `steps/set_speaker_stream.py` | starts speaker playback from its input pipe |
-| 8 | `bridges/mic_to_stt.py` | microphone audio into STT (checks the announced format) |
+| 8 | `bridges/mic_to_stt.py` | the microphone's utterances into STT, one event each (checks the announced format and rate) |
 | 9 | `bridges/stt_to_tts.py` | per STT utterance: progress messages, `BrainService.decide()`, the answer to TTS, movements to the stepper |
 | 10 | `bridges/tts_to_speaker.py` | TTS audio into the speaker (checks the announced format) |
 

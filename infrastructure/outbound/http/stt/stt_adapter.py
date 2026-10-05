@@ -8,7 +8,6 @@ from application.dtos.outbound_dtos import (
     STTBatchResponseDto,
     STTSetStreamRequestDto,
     STTStreamResponseDto,
-    STTTextStreamRequestDto,
 )
 from application.ports.outbound.stt_port import STTPort
 from shared_logging import get_logger
@@ -34,23 +33,10 @@ class HttpSTTAdapter(HttpServiceClient, STTPort):
         self._batch_endpoint = batch_endpoint
 
     async def set_stream(self, request: STTSetStreamRequestDto) -> None:
-        logger.info(
-            "posting STT stream input",
-            sample_rate=request.sample_rate,
-            chunk_size=request.chunk_size,
-            silence_threshold=request.silence_threshold,
-            silence_limit_seconds=request.silence_limit_seconds,
-        )
-        params = {
-            "sample_rate": request.sample_rate,
-            "chunk_size": request.chunk_size,
-            "silence_threshold": request.silence_threshold,
-            "silence_limit_seconds": request.silence_limit_seconds,
-        }
+        logger.info("posting STT stream input")
         try:
             response = await self._client.post(
                 self._url(self._set_stream_endpoint),
-                params=params,
                 content=request.audio_stream,
                 headers=self._headers({"Content-Type": "application/x-ndjson"}),
                 timeout=stream_timeout(self._config.timeout_seconds),  # ack ends with the upload
@@ -65,21 +51,9 @@ class HttpSTTAdapter(HttpServiceClient, STTPort):
             logger.error("STT stream input request failed", error=str(exc))
             raise ExternalServiceUnavailableError(self._config.service_name, str(exc)) from exc
 
-    async def get_stream(self, request: STTTextStreamRequestDto) -> STTStreamResponseDto:
-        logger.info(
-            "getting STT text stream output",
-            sample_rate=request.sample_rate,
-            chunk_size=request.chunk_size,
-            silence_threshold=request.silence_threshold,
-            silence_limit_seconds=request.silence_limit_seconds,
-        )
-        params = {
-            "sample_rate": request.sample_rate,
-            "chunk_size": request.chunk_size,
-            "silence_threshold": request.silence_threshold,
-            "silence_limit_seconds": request.silence_limit_seconds,
-        }
-        byte_stream = await self._open_bytes_from_stream("GET", self._get_stream_endpoint, params=params)
+    async def get_stream(self) -> STTStreamResponseDto:
+        logger.info("getting STT text stream output")
+        byte_stream = await self._open_bytes_from_stream("GET", self._get_stream_endpoint)
         logger.info("STT text stream output is open")
         return STTStreamResponseDto(text_stream=byte_stream)
 

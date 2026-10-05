@@ -4,7 +4,7 @@ from contextlib import suppress
 
 import pytest
 
-from application.dtos.outbound_dtos import MicrophoneStreamRequestDto, STTSetStreamRequestDto, STTTextStreamRequestDto
+from application.dtos.outbound_dtos import MicrophoneStreamRequestDto, STTSetStreamRequestDto
 from tests.shared.live_microservices import LiveMicroservices
 
 
@@ -38,22 +38,11 @@ async def test_live_microphone_to_stt_transcribes_speech_from_real_microphone() 
             live.stt_adapter.set_stream(
                 STTSetStreamRequestDto(
                     audio_stream=microphone_output.audio_stream,
-                    sample_rate=microphone_output.sample_rate,
-                    chunk_size=1024,
-                    silence_threshold=150,
-                    silence_limit_seconds=1.0,
                 )
             )
         )
         await asyncio.sleep(0.1)
-        stt_output = await live.stt_adapter.get_stream(
-            STTTextStreamRequestDto(
-                sample_rate=microphone_output.sample_rate,
-                chunk_size=1024,
-                silence_threshold=150,
-                silence_limit_seconds=1.0,
-            )
-        )
+        stt_output = await live.stt_adapter.get_stream()
         transcribed_text = await asyncio.wait_for(
             _read_first_non_empty_text(stt_output.text_stream),
             timeout=timeout_seconds,

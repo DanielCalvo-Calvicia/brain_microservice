@@ -25,15 +25,7 @@ def verify_microphone_output(output: MicrophoneStreamResponseDto) -> None:
 
 def verify_stt_input(stt_input: STTSetStreamRequestDto) -> None:
     _verify_stream("STT audio input", stt_input.audio_stream)
-    if stt_input.sample_rate <= 0:
-        raise RuntimeError("STT input verification failed: sample_rate must be positive")
-    if stt_input.chunk_size <= 0:
-        raise RuntimeError("STT input verification failed: chunk_size must be positive")
-    logger.info(
-        "STT input verified",
-        sample_rate=stt_input.sample_rate,
-        chunk_size=stt_input.chunk_size,
-    )
+    logger.info("STT input verified")
 
 
 def verify_stt_output(output: STTStreamResponseDto) -> None:

@@ -42,8 +42,8 @@ class STTStreamToInternalStreamToTTSStream:
     utterance arrives, `thinking` every few seconds until every flow has ended (see `progress.py`), and only
     then the answer is said and the movements are sent to the stepper.
 
-    STT itself is what marks utterance boundaries (its own silence detection: ``stt_silence_threshold``/
-    ``stt_silence_limit_seconds``), so every STT ``completed`` event is one utterance, decided on the
+    The microphone is what marks utterance boundaries (its silence detection, ``MICROPHONE_SILENCE_*``), so every
+    STT ``completed`` event is one utterance, decided on the
     spot: ai-agent is asked with just that utterance's text, and its reply - never the raw STT text -
     becomes one ``completed`` event of its own on the internal stream, which TTS speaks. STT ``partial``
     events are interim hypotheses of the utterance still being spoken and are only logged, never

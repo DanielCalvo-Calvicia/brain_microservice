@@ -48,8 +48,6 @@ class BatchTranscriptionServiceResponseDto:
 class MicrophoneTranscriptionServiceRequestDto:
     sample_rate: int = 16000
     chunk_size: int = 1024
-    silence_threshold: int = 150
-    silence_limit_seconds: float = 2.0
     max_segments: int = 1
 
 
@@ -62,8 +60,6 @@ class MicrophoneTranscriptionServiceResponseDto:
 class VoicePipelineServiceRequestDto:
     microphone_sample_rate: int = 16000
     microphone_chunk_size: int = 1024
-    stt_silence_threshold: int = 150
-    stt_silence_limit_seconds: float = 2.0
     max_text_segments: int = 0
     tts_sample_rate: int = 24000
     speaker_channels: int = 1

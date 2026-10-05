@@ -5,7 +5,6 @@ import pytest
 from application.dtos.outbound_dtos import (
     MicrophoneStreamResponseDto,
     STTStreamResponseDto,
-    STTTextStreamRequestDto,
 )
 from application.dtos.service_dtos import VoicePipelineServiceRequestDto
 from application.ports.outbound.stt_port import STTPort
@@ -16,7 +15,7 @@ from tests.shared.streams import byte_stream
 
 
 class ImmediateSTTOutput:
-    async def get_stream(self, request: STTTextStreamRequestDto) -> STTStreamResponseDto:
+    async def get_stream(self) -> STTStreamResponseDto:
         return STTStreamResponseDto(
             text_stream=byte_stream(
                 (

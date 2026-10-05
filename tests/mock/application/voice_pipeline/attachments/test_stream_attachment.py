@@ -22,7 +22,7 @@ class FailingStreamSTT(DiagnosticSTT):
     async def set_stream(self, request):
         self.stream_requests.append(request)
         async for event in ndjson_events(request.audio_stream, service_name="stt-test", schema=STT_INBOUND):
-            if event.type == "partial":
+            if event.type == "utterance":
                 self.audio_received += base64.b64decode(event.payload.bytes_base64)
         self._audio_complete.set()
         raise RuntimeError("stt stream failed")

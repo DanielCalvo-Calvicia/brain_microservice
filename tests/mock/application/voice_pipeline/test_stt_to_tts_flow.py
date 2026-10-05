@@ -7,7 +7,7 @@ from tests.shared.fakes import DiagnosticAIAgent, DiagnosticSTT, DiagnosticTTS, 
 @pytest.mark.asyncio
 async def test_stt_to_tts_flow_asks_ai_agent_once_per_utterance_up_to_the_cap_and_speaks_each_reply() -> None:
     # max_text_segments now bounds how many separate decisions are made, one per STT utterance
-    # (STT's own silence detection marks the boundary): "first" and "second" each get their own
+    # (the microphone's silence detection marks the boundary): "first" and "second" each get their own
     # ai-agent call; the empty chunk is skipped (not a decision) and "third" never arrives because
     # the cap of 2 decisions was already reached by "second".
     stt = DiagnosticSTT(text_chunks=(" first ", "", "second", "third"))

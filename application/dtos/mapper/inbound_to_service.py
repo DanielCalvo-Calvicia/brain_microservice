@@ -37,8 +37,6 @@ def map_microphone_transcription_request(
     return MicrophoneTranscriptionServiceRequestDto(
         sample_rate=request.sample_rate,
         chunk_size=request.chunk_size,
-        silence_threshold=request.silence_threshold,
-        silence_limit_seconds=request.silence_limit_seconds,
         max_segments=request.max_segments,
     )
 
@@ -47,8 +45,6 @@ def map_voice_pipeline_request(request: VoicePipelineRequestDto) -> VoicePipelin
     return VoicePipelineServiceRequestDto(
         microphone_sample_rate=request.microphone_sample_rate,
         microphone_chunk_size=request.microphone_chunk_size,
-        stt_silence_threshold=request.stt_silence_threshold,
-        stt_silence_limit_seconds=request.stt_silence_limit_seconds,
         max_text_segments=request.max_text_segments,
         tts_sample_rate=request.tts_sample_rate,
         speaker_channels=request.speaker_channels,

@@ -18,7 +18,7 @@ from contracts.stream.codec import NdjsonDecoder
 from contracts.stream.common.base import BaseEvent, EventType
 from contracts.stream.microservices.speaker.inbound.partial import SpeakerPartialInboundEventDTO
 from contracts.stream.microservices.stt.inbound.completed import STTCompletedInboundEventDTO
-from contracts.stream.microservices.stt.inbound.partial import STTPartialInboundEventDTO
+from contracts.stream.microservices.stt.inbound.utterance import STTUtteranceInboundEventDTO
 from contracts.stream.schemas import SPEAKER_INBOUND, STT_INBOUND
 from shared_logging.testing import capture
 from tests.shared.fakes import DiagnosticAIAgent, DiagnosticMotionAgent, DiagnosticStepper, build_brain_service
@@ -40,7 +40,11 @@ def _mic_wire(chunks: tuple[bytes, ...], *, completed_audio: bytes = b"") -> byt
         )
     ]
     for chunk in chunks:
-        events.append(stream_event_bytes("partial", len(events) + 1, {"bytes_base64": _b64(chunk)}))
+        events.append(
+            stream_event_bytes(
+                "utterance", len(events) + 1, {"bytes_base64": _b64(chunk), "sample_rate": 16000}
+            )
+        )
     events.append(
         stream_event_bytes(
             "completed",
@@ -63,17 +67,17 @@ async def test_mic_to_stt_relabels_microphone_events_as_stt_inbound_events() -> 
     _assert_sequence(events)
     assert [event.type for event in events] == [
         EventType.START_STREAM,
-        EventType.PARTIAL,
-        EventType.PARTIAL,
+        EventType.UTTERANCE,
+        EventType.UTTERANCE,
         EventType.COMPLETED,
     ]
-    assert events[1].payload == STTPartialInboundEventDTO(bytes_base64=_b64(b"mic-"))
-    assert events[2].payload == STTPartialInboundEventDTO(bytes_base64=_b64(b"audio"))
+    assert events[1].payload == STTUtteranceInboundEventDTO(bytes_base64=_b64(b"mic-"), sample_rate=16000)
+    assert events[2].payload == STTUtteranceInboundEventDTO(bytes_base64=_b64(b"audio"), sample_rate=16000)
     assert events[3].payload == STTCompletedInboundEventDTO(output_bytes_base64="")
 
 
 @pytest.mark.asyncio
-async def test_mic_to_stt_forwards_audio_that_only_the_completed_event_carries() -> None:
+async def test_mic_to_stt_passes_audio_that_only_the_completed_event_carries_on_unchanged() -> None:
     bridge = MicStreamToInternalStreamToSTTStream(
         byte_stream((_mic_wire((), completed_audio=b"all-at-once"),)), AsyncStreamPipe("stt-in")
     )
@@ -83,10 +87,9 @@ async def test_mic_to_stt_forwards_audio_that_only_the_completed_event_carries()
     events = await _collect_until_completed(bridge.internal_stream.stream)
     assert [event.type for event in events] == [
         EventType.START_STREAM,
-        EventType.PARTIAL,
         EventType.COMPLETED,
     ]
-    assert events[1].payload.bytes_base64 == _b64(b"all-at-once")
+    assert events[1].payload.output_bytes_base64 == _b64(b"all-at-once")  # STT takes it as one more utterance
 
 
 @pytest.mark.asyncio
@@ -103,16 +106,19 @@ async def test_mic_to_stt_writes_stt_inbound_ndjson_that_the_contract_accepts() 
     events = [e async for chunk in stt_in.stream for e in decoder.feed(chunk)]
     assert [e.type for e in events] == [
         EventType.START_STREAM,
-        EventType.PARTIAL,
-        EventType.PARTIAL,
+        EventType.UTTERANCE,
+        EventType.UTTERANCE,
         EventType.COMPLETED,
     ]
     assert base64.b64decode(events[2].payload.bytes_base64) == b"two"
+    assert events[2].payload.sample_rate == 16000
 
 
 @pytest.mark.asyncio
 async def test_a_microphone_that_breaks_the_contract_fails_the_stt_input() -> None:
-    bad = stream_event_bytes("partial", 1, {"bytes_base64": _b64(b"x")})  # no stream_started first
+    bad = stream_event_bytes(
+        "utterance", 1, {"bytes_base64": _b64(b"x"), "sample_rate": 16000}
+    )  # no stream_started first
     stt_in: AsyncStreamPipe[bytes] = AsyncStreamPipe("stt-in")
     bridge = MicStreamToInternalStreamToSTTStream(byte_stream((bad,)), stt_in)
 

@@ -12,8 +12,6 @@ class VoicePipelineSettings:
 
     microphone_sample_rate: int = 16000
     microphone_chunk_size: int = 1024
-    stt_silence_threshold: int = 150
-    stt_silence_limit_seconds: float = 2.0
     max_text_segments: int = 0
     tts_sample_rate: int = 24000
     speaker_channels: int = 1
@@ -23,10 +21,6 @@ class VoicePipelineSettings:
             raise ValueError("microphone_sample_rate must be positive")
         if self.microphone_chunk_size <= 0:
             raise ValueError("microphone_chunk_size must be positive")
-        if self.stt_silence_threshold < 0:
-            raise ValueError("stt_silence_threshold must not be negative")
-        if self.stt_silence_limit_seconds < 0:
-            raise ValueError("stt_silence_limit_seconds must not be negative")
         if self.max_text_segments < 0:
             raise ValueError("max_text_segments must not be negative")
         if self.tts_sample_rate <= 0:

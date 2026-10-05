@@ -22,8 +22,6 @@ async def test_live_voice_pipeline_runs_real_mic_to_stt_to_tts_to_speaker_attach
                 VoicePipelineServiceRequestDto(
                     microphone_sample_rate=16000,
                     microphone_chunk_size=1024,
-                    stt_silence_threshold=150,
-                    stt_silence_limit_seconds=0.5,
                     max_text_segments=1,
                     tts_sample_rate=24000,
                     speaker_channels=1,

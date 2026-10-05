@@ -12,7 +12,6 @@ from application.dtos.outbound_dtos import (
     MicrophoneStreamResponseDto,
     SpeakerPlaybackRequestDto,
     STTSetStreamRequestDto,
-    STTTextStreamRequestDto,
     TTSAudioStreamRequestDto,
     TTSSetStreamRequestDto,
     TTSTextStreamRequestDto,
@@ -105,22 +104,11 @@ async def test_live_voice_pipeline_flow_by_flow_with_seeded_generated_chunks() -
 
         microphone = GeneratedMicrophone(microphone_chunks)
         microphone_output = await microphone.start_stream(MicrophoneStreamRequestDto(sample_rate=16000, chunk_size=1024))
-        stt_output = await live.stt_adapter.get_stream(
-            STTTextStreamRequestDto(
-                sample_rate=microphone_output.sample_rate,
-                chunk_size=1024,
-                silence_threshold=150,
-                silence_limit_seconds=0.5,
-            )
-        )
+        stt_output = await live.stt_adapter.get_stream()
         stt_input_task = asyncio.create_task(
             live.stt_adapter.set_stream(
                 STTSetStreamRequestDto(
                     audio_stream=microphone_output.audio_stream,
-                    sample_rate=microphone_output.sample_rate,
-                    chunk_size=1024,
-                    silence_threshold=150,
-                    silence_limit_seconds=0.5,
                 )
             )
         )

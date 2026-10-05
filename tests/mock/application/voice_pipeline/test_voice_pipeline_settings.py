@@ -7,11 +7,10 @@ from tests.shared.fakes import build_brain_service
 
 
 def test_the_mapper_carries_every_field() -> None:
-    request = VoicePipelineServiceRequestDto(8000, 512, 10, 1.5, 3, 22050, 2)
+    request = VoicePipelineServiceRequestDto(8000, 512, 3, 22050, 2)
     settings = to_voice_pipeline_settings(request)
-    assert (settings.microphone_sample_rate, settings.microphone_chunk_size, settings.stt_silence_threshold,
-            settings.stt_silence_limit_seconds, settings.max_text_segments, settings.tts_sample_rate,
-            settings.speaker_channels) == (8000, 512, 10, 1.5, 3, 22050, 2)
+    assert (settings.microphone_sample_rate, settings.microphone_chunk_size, settings.max_text_segments,
+            settings.tts_sample_rate, settings.speaker_channels) == (8000, 512, 3, 22050, 2)
 
 
 @pytest.mark.asyncio

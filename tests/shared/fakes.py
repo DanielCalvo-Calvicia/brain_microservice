@@ -18,7 +18,6 @@ from application.dtos.outbound_dtos import (
     STTBatchResponseDto,
     STTSetStreamRequestDto,
     STTStreamResponseDto,
-    STTTextStreamRequestDto,
     StepperMoveResponseDto,
     TTSAudioStreamRequestDto,
     TTSAudioStreamResponseDto,
@@ -36,9 +35,9 @@ from contracts.stream.microservices.microphone.outbound.completed import (
     MicrophoneCompletedOutboundEvent,
     MicrophoneCompletedOutboundEventDTO,
 )
-from contracts.stream.microservices.microphone.outbound.partial import (
-    MicrophonePartialEvent,
-    MicrophonePartialEventDTO,
+from contracts.stream.microservices.microphone.outbound.utterance import (
+    MicrophoneUtteranceEvent,
+    MicrophoneUtteranceEventDTO,
 )
 from contracts.stream.microservices.microphone.outbound.stream_started import (
     MicrophoneStreamStartedEvent,
@@ -128,7 +127,7 @@ class DiagnosticSTT:
         self.batch_text = batch_text
         self.batch_fails = batch_fails
         self.stream_requests: list[STTSetStreamRequestDto] = []
-        self.get_requests: list[STTTextStreamRequestDto] = []
+        self.get_requests: list[bool] = []  # one entry per get_stream call
         self.batch_requests: list[STTBatchRequestDto] = []
         self.audio_received = b""
         self._audio_complete = asyncio.Event()
@@ -147,12 +146,12 @@ class DiagnosticSTT:
     async def set_stream(self, request: STTSetStreamRequestDto) -> None:
         self.stream_requests.append(request)
         async for event in ndjson_events(request.audio_stream, service_name="stt-test", schema=STT_INBOUND):
-            if event.type is EventType.PARTIAL:
+            if event.type is EventType.UTTERANCE:
                 self.audio_received += base64.b64decode(event.payload.bytes_base64)
         self._audio_complete.set()
 
-    async def get_stream(self, request: STTTextStreamRequestDto) -> STTStreamResponseDto:
-        self.get_requests.append(request)
+    async def get_stream(self) -> STTStreamResponseDto:
+        self.get_requests.append(True)
         return STTStreamResponseDto(text_stream=self._sse_text_after_audio())
 
     async def _sse_text_after_audio(self):
@@ -362,7 +361,7 @@ def build_brain_service(
     )
 
 async def microphone_event_stream(chunks: tuple[bytes, ...], sample_rate: int = 16000):
-    """What the microphone microservice sends on ``GET /stream`` (microphone outbound contract)."""
+    """What the microphone microservice sends on ``GET /stream`` (microphone outbound contract): one utterance per chunk."""
     events = EventSequencer()
     yield encode_ndjson(
         events.next(
@@ -371,7 +370,9 @@ async def microphone_event_stream(chunks: tuple[bytes, ...], sample_rate: int = 
         )
     )
     for chunk in chunks:
-        yield encode_ndjson(events.next(MicrophonePartialEvent, MicrophonePartialEventDTO(_base64_audio(chunk))))
+        yield encode_ndjson(
+            events.next(MicrophoneUtteranceEvent, MicrophoneUtteranceEventDTO(_base64_audio(chunk), sample_rate))
+        )
     yield encode_ndjson(
         events.next(
             MicrophoneCompletedOutboundEvent,

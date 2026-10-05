@@ -13,9 +13,9 @@ from contracts.stream.microservices.stt.inbound.stream_started import (
     STTStreamStartedInboundEvent,
     STTStreamStartedInboundEventDTO,
 )
-from contracts.stream.microservices.stt.inbound.partial import (
-    STTPartialInboundEvent,
-    STTPartialInboundEventDTO,
+from contracts.stream.microservices.stt.inbound.utterance import (
+    STTUtteranceInboundEvent,
+    STTUtteranceInboundEventDTO,
 )
 from contracts.stream.schemas import MICROPHONE_OUTBOUND
 from shared_logging import get_logger
@@ -33,8 +33,10 @@ logger = get_logger(__name__)
 class MicStreamToInternalStreamToSTTStream:
     """Microphone outbound events -> (internal stream of STT inbound events) -> STT input.
 
-    The audio bytes are never touched: both contracts carry raw PCM16 in ``bytes_base64``, so
-    Brain only re-labels each event for its next hop.
+    The microphone cuts the audio into utterances (silence detection lives there) and sends one
+    ``utterance`` event for each; STT only transcribes them. The audio bytes are never touched:
+    both contracts carry raw PCM16 in ``bytes_base64``, so Brain only re-labels each event for its
+    next hop.
     """
 
     def __init__(
@@ -55,7 +57,7 @@ class MicStreamToInternalStreamToSTTStream:
 
     async def mic_stream_to_internal_stream(self) -> None:
         events = EventSequencer()
-        partials_since_completed = 0
+        announced_rate = self.expected_sample_rate
         try:
             async for event in ndjson_events(
                 self.mic_stream_out, service_name="microphone", schema=MICROPHONE_OUTBOUND
@@ -67,6 +69,7 @@ class MicStreamToInternalStreamToSTTStream:
                     )
                     if mismatch:
                         raise ExternalServiceInvalidResponseError("microphone", mismatch)
+                    announced_rate = announced.sample_rate
                     await self.internal_stream.put(
                         events.next(
                             STTStreamStartedInboundEvent,
@@ -77,30 +80,27 @@ class MicStreamToInternalStreamToSTTStream:
                     )
                 elif event.type is EventType.HEARTBEAT:
                     await self.internal_stream.put(events.next(HeartbeatEvent))
-                elif event.type is EventType.PARTIAL:
-                    partials_since_completed += 1
+                elif event.type is EventType.UTTERANCE:
+                    if announced_rate is not None and event.payload.sample_rate != announced_rate:
+                        raise ExternalServiceInvalidResponseError(
+                            "microphone",
+                            f"utterance at {event.payload.sample_rate} Hz but the stream announced {announced_rate} Hz",
+                        )
                     logger.info(
-                        "received microphone partial audio",
+                        "received microphone utterance",
                         encoded_chars=len(event.payload.bytes_base64),
+                        sample_rate=event.payload.sample_rate,
                     )
                     await self.internal_stream.put(
                         events.next(
-                            STTPartialInboundEvent,
-                            STTPartialInboundEventDTO(bytes_base64=event.payload.bytes_base64),
+                            STTUtteranceInboundEvent,
+                            STTUtteranceInboundEventDTO(
+                                bytes_base64=event.payload.bytes_base64,
+                                sample_rate=event.payload.sample_rate,
+                            ),
                         )
                     )
                 elif event.type is EventType.COMPLETED:
-                    completed_audio = event.payload.output_bytes_base64
-                    if partials_since_completed == 0 and completed_audio:
-                        # The microphone delivered its audio only in ``completed``: pass it on as
-                        # a partial so STT receives every byte before the end-of-utterance mark.
-                        await self.internal_stream.put(
-                            events.next(
-                                STTPartialInboundEvent,
-                                STTPartialInboundEventDTO(bytes_base64=completed_audio),
-                            )
-                        )
-                    partials_since_completed = 0
                     logger.info(
                         "mic-to-STT internal stream completed event",
                         reason=event.payload.reason,
@@ -109,7 +109,10 @@ class MicStreamToInternalStreamToSTTStream:
                     await self.internal_stream.put(
                         events.next(
                             STTCompletedInboundEvent,
-                            STTCompletedInboundEventDTO(output_bytes_base64=""),
+                            # the microphone sends no audio here; if one ever does, STT takes it as an utterance
+                            STTCompletedInboundEventDTO(
+                                output_bytes_base64=event.payload.output_bytes_base64
+                            ),
                         )
                     )
                 elif event.type is EventType.ERROR:

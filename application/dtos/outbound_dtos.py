@@ -22,19 +22,9 @@ class MicrophoneStreamResponseDto:
 
 @dataclass(frozen=True, slots=True)
 class STTSetStreamRequestDto:
+    """The upload to STT: NDJSON events of the STT inbound contract, one ``utterance`` per utterance."""
+
     audio_stream: AsyncIterator[bytes]
-    sample_rate: int = 16000
-    chunk_size: int = 1024
-    silence_threshold: int = 150
-    silence_limit_seconds: float = 2.0
-
-
-@dataclass(frozen=True, slots=True)
-class STTTextStreamRequestDto:
-    sample_rate: int = 16000
-    chunk_size: int = 1024
-    silence_threshold: int = 150
-    silence_limit_seconds: float = 2.0
 
 
 @dataclass(frozen=True, slots=True)

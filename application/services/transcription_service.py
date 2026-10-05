@@ -7,7 +7,6 @@ from application.dtos.outbound_dtos import (
     MicrophoneStreamRequestDto,
     STTBatchRequestDto,
     STTSetStreamRequestDto,
-    STTTextStreamRequestDto,
 )
 from application.dtos.service_dtos import (
     BatchTranscriptionServiceRequestDto,
@@ -63,13 +62,7 @@ class TranscriptionService:
             )
             verify_microphone_output(microphone_output)
             stt_stream_in_pipe = AsyncStreamPipe[bytes]("transcribe-stt-stream-in")
-            stt_input = STTSetStreamRequestDto(
-                audio_stream=stt_stream_in_pipe.stream,
-                sample_rate=microphone_output.sample_rate,
-                chunk_size=request.chunk_size,
-                silence_threshold=request.silence_threshold,
-                silence_limit_seconds=request.silence_limit_seconds,
-            )
+            stt_input = STTSetStreamRequestDto(audio_stream=stt_stream_in_pipe.stream)
             verify_stt_input(stt_input)
             stt_input_task = asyncio.create_task(self.stt_port.set_stream(stt_input))
             mic_to_stt = MicStreamToInternalStreamToSTTStream(
@@ -84,14 +77,7 @@ class TranscriptionService:
                 await stt_input_task
 
             try:
-                stt_output = await self.stt_port.get_stream(
-                    STTTextStreamRequestDto(
-                        sample_rate=stt_input.sample_rate,
-                        chunk_size=stt_input.chunk_size,
-                        silence_threshold=stt_input.silence_threshold,
-                        silence_limit_seconds=stt_input.silence_limit_seconds,
-                    )
-                )
+                stt_output = await self.stt_port.get_stream()
                 verify_stt_output(stt_output)
                 segments: list[str] = []
                 async for event in sse_events(stt_output.text_stream, service_name="stt", schema=STT_OUTBOUND):
