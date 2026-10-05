@@ -129,18 +129,20 @@ def _wake_setup(config: AppConfig) -> WakeSetup | None:
     """The wake phrase, when enabled: the gate is the same STT service, under its own route prefix."""
     if not config.wake_phrase_enabled:
         return None
+    settings = WakePhraseSettings(
+        phrase=config.wake_phrase,
+        name_similarity=config.wake_name_similarity,
+        followup_seconds=config.wake_followup_seconds,
+        ack_message=config.wake_ack_message,
+    )
+    if not config.wake_use_gate_stt:
+        return WakeSetup(gate=WakeGate(settings))  # the real STT hears everything; the phrase is read in its text
     prefix = config.stt_gate_path_prefix
     gate_stt_adapter = HttpSTTAdapter(
         _http_config("stt", config.stt_base_url, config),
         set_stream_endpoint=prefix + config.stt_set_stream_endpoint,
         get_stream_endpoint=prefix + config.stt_get_stream_endpoint,
         batch_endpoint=prefix + config.stt_batch_endpoint,  # the gate has no batch route; never used
-    )
-    settings = WakePhraseSettings(
-        phrase=config.wake_phrase,
-        name_similarity=config.wake_name_similarity,
-        followup_seconds=config.wake_followup_seconds,
-        ack_message=config.wake_ack_message,
     )
     return WakeSetup(gate=WakeGate(settings), gate_stt_port=gate_stt_adapter)
 

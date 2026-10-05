@@ -10,6 +10,7 @@ NAMES = (
     "WAKE_NAME_SIMILARITY",
     "WAKE_FOLLOWUP_SECONDS",
     "WAKE_ACK_MESSAGE",
+    "WAKE_USE_GATE_STT",
     "STT_GATE_PATH_PREFIX",
 )
 
@@ -61,3 +62,13 @@ def test_enabled_the_live_audio_goes_to_the_gate_routes_of_the_same_stt_service(
     assert gate_port._set_stream_endpoint == "/gate/process/stream/set"
     assert gate_port._get_stream_endpoint == "/gate/process/stream/get"
     assert gate_port._config.base_url == load_config().stt_base_url
+
+
+def test_the_local_gate_can_be_turned_off_and_then_the_real_stt_carries_the_live_audio(monkeypatch) -> None:
+    assert load_config().wake_use_gate_stt is True
+    monkeypatch.setenv("WAKE_PHRASE_ENABLED", "1")
+    monkeypatch.setenv("WAKE_USE_GATE_STT", "0")
+
+    wake = generate_brain_core_dependency(load_config()).service.voice_pipeline.wake
+
+    assert wake is not None and wake.gate_stt_port is None

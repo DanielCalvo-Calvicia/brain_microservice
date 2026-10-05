@@ -91,3 +91,18 @@ async def test_without_the_wake_phrase_everything_goes_through_the_one_stt_as_be
 
     assert [r.message for r in ai_agent.message_requests] == ["hello"]
     assert stt.batch_requests == []
+
+
+@pytest.mark.asyncio
+async def test_without_a_local_gate_the_real_stt_hears_everything_and_the_phrase_is_read_in_its_text() -> None:
+    stt = DiagnosticSTT(text_chunks=("nice weather today", "Oblivion 306, raise your arm"))
+    ai_agent = DiagnosticAIAgent(response="the reply")
+    tts = DiagnosticTTS()
+    wake = WakeSetup(gate=WakeGate(WakePhraseSettings(phrase="Oblivion 306")))  # no gate_stt_port
+    service = build_brain_service(stt=stt, ai_agent=ai_agent, tts=tts, wake=wake)
+
+    await _pipeline(service, 1)
+
+    assert stt.get_requests and stt.batch_requests == []  # one engine, no second pass over the audio
+    assert [r.message for r in ai_agent.message_requests] == ["raise your arm"]
+    assert tts.text_received == ["the reply"]

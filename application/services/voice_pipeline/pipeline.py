@@ -43,8 +43,8 @@ class VoicePipelineFlow:
         self.brain_service = brain_service
         self.health_route = CheckHealth(microphone_port, stt_port, tts_port, speaker_port)
         self.get_microphone_route = GetMicrophoneStream(microphone_port)
-        # With the wake phrase the live audio goes through the gate STT; the real one only gets batches
-        live_stt_port = wake.gate_stt_port if wake is not None else stt_port
+        # With the wake phrase and a local gate the live audio goes through the gate STT; the real one only gets batches
+        live_stt_port = wake.gate_stt_port if wake is not None and wake.gate_stt_port is not None else stt_port
         self.set_stt_route = SetSTTStream(live_stt_port)
         self.get_stt_route = GetSTTStream(live_stt_port)
         self.set_tts_route = SetTTSStream(tts_port)

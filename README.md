@@ -153,6 +153,7 @@ Environment variables (process environment, then the selected VS Code launch pro
 | `WAKE_NAME_SIMILARITY` | `0.75` | How like the name a misheard word may be (0 to 1) |
 | `WAKE_FOLLOWUP_SECONDS` | `15` | After the phrase alone, the next sentence is taken without it, once, within this time (`0` = off) |
 | `WAKE_ACK_MESSAGE` | `Yes?` | Said when the phrase comes alone |
+| `WAKE_USE_GATE_STT` | `1` | `0` = no local gate: the real STT hears every utterance (costs tokens) and the phrase is read in its text |
 | `STT_GATE_PATH_PREFIX` | `/gate` | Where the gate's routes are in the STT service |
 | `STEPPER_BASE_URL` | `http://127.0.0.1:8005` | stepper origin |
 | `STEPPER_ROTATE_ENDPOINT_TEMPLATE` | `/control/{stepper_id}/rotate` | Rotate route with a `{stepper_id}` placeholder |
