@@ -84,7 +84,8 @@ class AgentService:
                 logger.info("ai-agent flow waits for the user; the next utterance is its answer", flow=session.name)
                 break
 
-        return to_decision_dto(agent_chain.fold(results, failed))
+        decision = to_decision_dto(agent_chain.fold(results, failed))
+        return replace(decision, awaiting_user_input=self._dialogue.waiting_flow is not None)
 
     async def move_arm(self, directive: MotorDirectiveDto) -> StepperMoveResponseDto:
         """Only Brain calls stepper. ai-agent only hands over the directive; a failed or refused

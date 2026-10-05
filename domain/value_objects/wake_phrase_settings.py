@@ -7,10 +7,12 @@ class WakePhraseSettings:
 
     A name misspelled a little is still the name when it is at least ``name_similarity`` like it (0 to 1). When the
     phrase is said alone the robot answers ``ack_message`` and takes the next sentence without the phrase, if it
-    comes within ``followup_seconds`` (0 turns that off).
+    comes within ``followup_seconds`` (0 turns that off). The same goes for the answer to a question an agent asks
+    (``answer_seconds``, longer because the robot is still speaking the question), so the answer needs no phrase either.
     """
 
     phrase: str = "Oblivion 306"
     name_similarity: float = 0.75
     followup_seconds: float = 15.0
+    answer_seconds: float = 45.0
     ack_message: str = "Yes?"

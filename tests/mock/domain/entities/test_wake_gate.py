@@ -68,3 +68,21 @@ def test_the_command_comes_from_the_real_stt_text_without_the_phrase() -> None:
 
 def test_the_gate_text_is_the_fallback_when_nothing_is_left_of_the_real_text() -> None:
     assert _gate().command_from("Oblivion 306", fallback="raise arm") == "raise arm"
+
+
+def test_the_answer_to_an_agents_question_is_accepted_without_the_phrase_once() -> None:
+    gate = WakeGate(WakePhraseSettings(phrase="Oblivion 306", followup_seconds=1.0, answer_seconds=30.0))
+    gate.open_for_answer(now=0.0)
+
+    assert gate.evaluate("ninety degrees", now=20.0) == WakeDecision(WakeVerdict.ANSWER, "ninety degrees")
+    assert gate.evaluate("and again", now=21.0).verdict is WakeVerdict.IGNORE
+
+
+def test_the_answer_window_closes_after_its_time_and_can_be_turned_off() -> None:
+    gate = WakeGate(WakePhraseSettings(phrase="Oblivion 306", answer_seconds=30.0))
+    gate.open_for_answer(now=0.0)
+    assert gate.evaluate("ninety degrees", now=31.0).verdict is WakeVerdict.IGNORE
+
+    off = WakeGate(WakePhraseSettings(phrase="Oblivion 306", answer_seconds=0.0))
+    off.open_for_answer(now=0.0)
+    assert off.evaluate("ninety degrees", now=1.0).verdict is WakeVerdict.IGNORE

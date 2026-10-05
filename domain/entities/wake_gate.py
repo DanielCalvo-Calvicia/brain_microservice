@@ -45,6 +45,11 @@ class WakeGate:
         self._open_until = 0.0
         return WakeDecision(WakeVerdict.IGNORE)
 
+    def open_for_answer(self, now: float) -> None:
+        """An agent asked a question: the next sentence, its answer, is accepted without the phrase (once)."""
+        if self.settings.answer_seconds > 0:
+            self._open_until = now + self.settings.answer_seconds
+
     def command_from(self, real_heard: str, fallback: str) -> str:
         """The command in the real STT's text: without the phrase, or ``fallback`` when nothing is left of it."""
         command = strip_wake_phrase(real_heard, self._phrase, self.settings.name_similarity)

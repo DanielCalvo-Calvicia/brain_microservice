@@ -106,3 +106,31 @@ async def test_without_a_local_gate_the_real_stt_hears_everything_and_the_phrase
     assert stt.get_requests and stt.batch_requests == []  # one engine, no second pass over the audio
     assert [r.message for r in ai_agent.message_requests] == ["raise your arm"]
     assert tts.text_received == ["the reply"]
+
+
+@pytest.mark.asyncio
+async def test_the_answer_to_a_question_of_an_agent_needs_no_wake_phrase() -> None:
+    from tests.shared.fakes import DiagnosticFlow
+
+    stt = DiagnosticSTT(text_chunks=("Oblivion 306 raise your arm", "ninety degrees"))
+    asking = DiagnosticFlow("motion-flow", spoken="How far?", awaiting_user_input=True)
+    tts = DiagnosticTTS()
+    wake = WakeSetup(gate=WakeGate(WakePhraseSettings(phrase="Oblivion 306")))
+    service = build_brain_service(stt=stt, tts=tts, flows=(asking,), wake=wake)
+
+    await _pipeline(service, 2)
+
+    assert [r.message for r in asking.message_requests] == ["raise your arm", "ninety degrees"]
+    assert tts.text_received == ["How far?", "How far?"]
+
+
+@pytest.mark.asyncio
+async def test_without_a_question_the_next_sentence_still_needs_the_phrase() -> None:
+    stt = DiagnosticSTT(text_chunks=("Oblivion 306 raise your arm", "ninety degrees", "Oblivion 306 wave"))
+    ai_agent = DiagnosticAIAgent(response="the reply")
+    wake = WakeSetup(gate=WakeGate(WakePhraseSettings(phrase="Oblivion 306")))
+    service = build_brain_service(stt=stt, ai_agent=ai_agent, wake=wake)
+
+    await _pipeline(service, 2)
+
+    assert [r.message for r in ai_agent.message_requests] == ["raise your arm", "wave"]

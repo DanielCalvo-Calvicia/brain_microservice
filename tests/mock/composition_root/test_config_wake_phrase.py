@@ -11,6 +11,7 @@ NAMES = (
     "WAKE_FOLLOWUP_SECONDS",
     "WAKE_ACK_MESSAGE",
     "WAKE_USE_GATE_STT",
+    "WAKE_ANSWER_SECONDS",
     "STT_GATE_PATH_PREFIX",
 )
 
@@ -72,3 +73,9 @@ def test_the_local_gate_can_be_turned_off_and_then_the_real_stt_carries_the_live
     wake = generate_brain_core_dependency(load_config()).service.voice_pipeline.wake
 
     assert wake is not None and wake.gate_stt_port is None
+
+
+def test_the_answer_window_is_45_seconds_by_default_and_comes_from_the_environment(monkeypatch) -> None:
+    assert load_config().wake_answer_seconds == 45.0
+    monkeypatch.setenv("WAKE_ANSWER_SECONDS", "20")
+    assert load_config().wake_answer_seconds == 20.0

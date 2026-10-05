@@ -133,6 +133,7 @@ def _wake_setup(config: AppConfig) -> WakeSetup | None:
         phrase=config.wake_phrase,
         name_similarity=config.wake_name_similarity,
         followup_seconds=config.wake_followup_seconds,
+        answer_seconds=config.wake_answer_seconds,
         ack_message=config.wake_ack_message,
     )
     if not config.wake_use_gate_stt:

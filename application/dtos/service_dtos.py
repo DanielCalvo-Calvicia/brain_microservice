@@ -13,6 +13,7 @@ class AgentDecisionDto:
     spoken: tuple[str, ...] = ()
     directives: tuple[MotorDirectiveDto, ...] = ()
     failed_flows: tuple[str, ...] = ()
+    awaiting_user_input: bool = False  # a flow asked the user a question: the next utterance is its answer
 
 @dataclass(frozen=True, slots=True)
 class HealthCheckServiceResponseDto:

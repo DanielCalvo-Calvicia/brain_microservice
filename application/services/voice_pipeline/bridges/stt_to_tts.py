@@ -146,11 +146,14 @@ class STTStreamToInternalStreamToTTSStream:
                     # have ended say the answer and send the movements to the stepper.
                     progress = self.brain_service.progress
                     await say(progress.received)
-                    spoken, directives = await run_with_progress(self._decide(text), say, progress)
+                    spoken, directives, awaiting_answer = await run_with_progress(self._decide(text), say, progress)
                     for part in spoken:
                         await say(part)
                     if directives:
                         self._dispatch_moves(directives)
+                    if awaiting_answer and self.wake is not None:
+                        # an agent asked a question: its answer needs no wake phrase
+                        self.wake.gate.open_for_answer(self._clock())
                     decisions_made += 1
                     if max_segments > 0 and decisions_made >= max_segments:
                         logger.info("text segment limit reached", max_segments=max_segments)
@@ -200,19 +203,19 @@ class STTStreamToInternalStreamToTTSStream:
         logger.info("utterance for the robot", chars=len(command), audio_bytes=len(audio), gate_heard=heard)
         return clean_utterance(command)
 
-    async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...]]:
+    async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...], bool]:
         """What to say once every flow of ai-agent has ended (in order), and what to move (nothing, one movement
-        or a sequence). ``text`` is one already-stripped, non-empty utterance: the caller never invokes this for
+        or a sequence), and whether an agent is waiting for the user's answer. ``text`` is one already-stripped, non-empty utterance: the caller never invokes this for
         a blank completed event."""
         try:
             decision = await self.brain_service.decide(text)
         except Exception as exc:
             logger.error("ai-agent call failed; falling back to a fixed apology", error=str(exc))
-            return (_AI_AGENT_UNREACHABLE_APOLOGY,), ()
+            return (_AI_AGENT_UNREACHABLE_APOLOGY,), (), False
         spoken = decision.spoken
         if not spoken and decision.failed_flows:
             spoken = (_AI_AGENT_UNREACHABLE_APOLOGY,)
-        return spoken, decision.directives
+        return spoken, decision.directives, decision.awaiting_user_input
     def _dispatch_moves(self, directives: tuple[MotorDirectiveDto, ...]) -> None:
         """Fire-and-forget: move_arms() runs the sequence in order and already swallows and logs its own
         failures, and a movement must never block, fail or be cut off by the spoken reply's own pipeline
