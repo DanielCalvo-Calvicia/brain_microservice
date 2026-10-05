@@ -154,7 +154,7 @@ Environment variables (process environment, then the selected VS Code launch pro
 | `WAKE_FOLLOWUP_SECONDS` | `15` | After the phrase alone, the next sentence is taken without it, once, within this time (`0` = off) |
 | `WAKE_ACK_MESSAGE` | `Yes?` | Said when the phrase comes alone |
 | `WAKE_USE_GATE_STT` | `1` | `0` = no local gate: the real STT hears every utterance (costs tokens) and the phrase is read in its text |
-| `ECHO_GUARD_SECONDS` | `1.5` | An utterance captured while the robot was speaking, or this many seconds after, is the robot hearing itself and is dropped before STT (`0` = off) |
+| `ECHO_GUARD_SECONDS` | `0.5` | An utterance captured while the robot was speaking, or this many seconds after, is the robot hearing itself and is dropped before STT (`0` = off) |
 | `WAKE_ANSWER_SECONDS` | `45` | When an agent asks a question, the next sentence (its answer) is taken without the phrase, once, within this time (`0` = off) |
 | `STT_GATE_PATH_PREFIX` | `/gate` | Where the gate's routes are in the STT service |
 | `STEPPER_BASE_URL` | `http://127.0.0.1:8005` | stepper origin |
