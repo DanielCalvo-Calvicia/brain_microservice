@@ -9,6 +9,7 @@ from application.ports.outbound.tts_port import TTSPort
 from application.services.microphone_lifecycle import stop_microphone_safely
 from application.services.voice_pipeline.context import VoicePipelineContext
 from application.services.voice_pipeline.verification import verify_speaker_response
+from application.services.voice_pipeline.wake import WakeSetup
 from application.services.voice_pipeline.steps.health_check import CheckHealth
 from application.services.voice_pipeline.steps.get_mic_stream import GetMicrophoneStream
 from application.services.voice_pipeline.steps.get_stt_stream import GetSTTStream
@@ -34,13 +35,18 @@ class VoicePipelineFlow:
         tts_port: TTSPort,
         speaker_port: SpeakerPort,
         brain_service,
+        wake: WakeSetup | None = None,
     ) -> None:
         self.microphone_port = microphone_port
+        self.stt_port = stt_port
+        self.wake = wake
         self.brain_service = brain_service
         self.health_route = CheckHealth(microphone_port, stt_port, tts_port, speaker_port)
         self.get_microphone_route = GetMicrophoneStream(microphone_port)
-        self.set_stt_route = SetSTTStream(stt_port)
-        self.get_stt_route = GetSTTStream(stt_port)
+        # With the wake phrase the live audio goes through the gate STT; the real one only gets batches
+        live_stt_port = wake.gate_stt_port if wake is not None else stt_port
+        self.set_stt_route = SetSTTStream(live_stt_port)
+        self.get_stt_route = GetSTTStream(live_stt_port)
         self.set_tts_route = SetTTSStream(tts_port)
         self.get_tts_route = GetTTSStream(tts_port)
         self.set_speaker_route = SetSpeakerStream(speaker_port)
@@ -76,6 +82,9 @@ class VoicePipelineFlow:
                 context.require_stt_output().text_stream,
                 context.require_tts_stream_in_pipe(),
                 self.brain_service,
+                wake=self.wake,
+                stt_port=self.stt_port,
+                sample_rate=context.require_microphone_output().sample_rate,
             )
             await stt_to_tts.run(context)
 

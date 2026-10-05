@@ -24,6 +24,7 @@ from application.services.agent_flow_session import AgentFlowSession
 from application.services.agent_service import AgentService
 from application.services.health_service import HealthService
 from application.services.voice_pipeline.pipeline import VoicePipelineFlow
+from application.services.voice_pipeline.wake import WakeSetup
 from application.services.playback_service import PlaybackService
 from application.services.transcription_service import TranscriptionService
 from domain.value_objects.progress_messages import ProgressMessages
@@ -42,6 +43,7 @@ class BrainService(BrainServicePort):
         stepper_port: StepperPort,
         agent_flows: Sequence[AgentFlowPort] = (),
         progress: ProgressMessages | None = None,
+        wake: WakeSetup | None = None,
     ) -> None:
         self.microphone_port = microphone_port
         self.stt_port = stt_port
@@ -51,7 +53,7 @@ class BrainService(BrainServicePort):
         self._transcription = TranscriptionService(microphone_port, stt_port)
         self._playback = PlaybackService(tts_port, speaker_port)
         self._agent = AgentService(stepper_port, agent_flows, progress)
-        self.voice_pipeline = VoicePipelineFlow(microphone_port, stt_port, tts_port, speaker_port, self)
+        self.voice_pipeline = VoicePipelineFlow(microphone_port, stt_port, tts_port, speaker_port, self, wake)
 
     @property
     def stepper_port(self) -> StepperPort:

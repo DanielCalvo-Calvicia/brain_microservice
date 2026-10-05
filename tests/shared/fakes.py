@@ -27,6 +27,7 @@ from application.dtos.outbound_dtos import (
 )
 from domain.value_objects.progress_messages import ProgressMessages
 from application.services.brain_service import BrainService
+from application.services.voice_pipeline.wake import WakeSetup
 from application.services.streams.events import ndjson_events
 from contracts.stream.codec import EventSequencer, encode_ndjson, encode_sse
 from contracts.stream.common.base import EventType
@@ -116,9 +117,16 @@ class DiagnosticSTT:
         *,
         available: bool = True,
         text_chunks: tuple[str, ...] = ("hello", "world"),
+        with_audio: bool = False,
+        batch_text: str = "batch text",
+        batch_fails: bool = False,
     ) -> None:
         self.available = available
         self.text_chunks = text_chunks
+        # a gate STT also returns each utterance's audio (``b"audio of <text>"``); the real one answers batches
+        self.with_audio = with_audio
+        self.batch_text = batch_text
+        self.batch_fails = batch_fails
         self.stream_requests: list[STTSetStreamRequestDto] = []
         self.get_requests: list[STTTextStreamRequestDto] = []
         self.batch_requests: list[STTBatchRequestDto] = []
@@ -153,13 +161,19 @@ class DiagnosticSTT:
         yield encode_sse(events.next(StartStreamEvent)).encode()
         async for text in text_stream(self.text_chunks):
             yield encode_sse(events.next(STTPartialOutboundEvent, STTPartialOutboundEventDTO(text=text))).encode()
+            audio = base64.b64encode(b"audio of " + text.encode()).decode() if self.with_audio else ""
             yield encode_sse(
-                events.next(STTCompletedOutboundEvent, STTCompletedOutboundEventDTO(reason="completed", output=text))
+                events.next(
+                    STTCompletedOutboundEvent,
+                    STTCompletedOutboundEventDTO(reason="completed", output=text, audio_base64=audio),
+                )
             ).encode()
 
     async def process_batch(self, request: STTBatchRequestDto) -> STTBatchResponseDto:
         self.batch_requests.append(request)
-        return STTBatchResponseDto(text="batch text")
+        if self.batch_fails:
+            raise RuntimeError("real STT is down")
+        return STTBatchResponseDto(text=self.batch_text)
 
 
 class DiagnosticTTS:
@@ -330,6 +344,7 @@ def build_brain_service(
     motion_agent: DiagnosticFlow | None = None,
     progress: ProgressMessages = SILENT,
     flows: tuple[DiagnosticFlow, ...] | None = None,
+    wake: WakeSetup | None = None,
 ) -> BrainService:
     """Brain with diagnostic fakes. The flows are conversation-flow then (when given) motion-flow, in that order,
     like the default AI_AGENT_FLOWS; pass ``flows`` to choose any list. No progress messages unless asked."""
@@ -343,6 +358,7 @@ def build_brain_service(
         stepper or DiagnosticStepper(),
         flows,
         progress,
+        wake,
     )
 
 async def microphone_event_stream(chunks: tuple[bytes, ...], sample_rate: int = 16000):

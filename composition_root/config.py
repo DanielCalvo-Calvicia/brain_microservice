@@ -37,6 +37,12 @@ class AppConfig:
     startup_preflight_enabled: bool
     startup_preflight_timeout_seconds: float
     microservice_ready_poll_interval_seconds: float
+    wake_phrase_enabled: bool = False
+    wake_phrase: str = "Oblivion 306"
+    wake_name_similarity: float = 0.75
+    wake_followup_seconds: float = 15.0
+    wake_ack_message: str = "Yes?"
+    stt_gate_path_prefix: str = "/gate"
 
 
 def load_config() -> AppConfig:
@@ -118,6 +124,14 @@ def load_config() -> AppConfig:
         startup_preflight_enabled=_bool_env("STARTUP_PREFLIGHT_ENABLED", True),
         startup_preflight_timeout_seconds=_float_env("STARTUP_PREFLIGHT_TIMEOUT_SECONDS", 60.0),
         microservice_ready_poll_interval_seconds=_float_env("MICROSERVICE_READY_POLL_INTERVAL_SECONDS", 2.0),
+        # The wake phrase: with it on, an utterance is answered only when the gate STT (a local engine inside the
+        # STT service, under STT_GATE_PATH_PREFIX) heard the phrase; only then is its audio sent to the real STT.
+        wake_phrase_enabled=_bool_env("WAKE_PHRASE_ENABLED", False),
+        wake_phrase=_text_env("WAKE_PHRASE", "Oblivion 306").strip() or "Oblivion 306",
+        wake_name_similarity=_float_env("WAKE_NAME_SIMILARITY", 0.75),
+        wake_followup_seconds=_float_env("WAKE_FOLLOWUP_SECONDS", 15.0),
+        wake_ack_message=_text_env("WAKE_ACK_MESSAGE", "Yes?"),
+        stt_gate_path_prefix=_text_env("STT_GATE_PATH_PREFIX", "/gate").rstrip("/"),
     )
 
 

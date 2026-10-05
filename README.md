@@ -60,6 +60,8 @@ Every business rule lives in `domain/` (standard library only): the flow chain, 
 
 **What the user hears while ai-agent works** (`application/services/progress.py`): `message received` at once when an utterance arrives (`PROGRESS_RECEIVED_MESSAGE`), `thinking` every `PROGRESS_THINKING_INTERVAL_SECONDS` while the flows run (the first after one interval, so a quick answer stays quiet), and only when all flows have ended the answer and the movements.
 
+**Wake phrase** (`WAKE_PHRASE_ENABLED=1`). Only one microphone stream exists. With the phrase on, that stream goes to the STT service's *gate* routes (`/gate/process/stream/...`), a small local engine that costs no tokens and returns each utterance's text and audio. `domain/entities/wake_gate.py` decides from that text (`domain/operations/wake_phrase.py` finds the phrase anywhere, tolerating a misspelt name and a code said as `306`, `three oh six` or `three hundred and six`): without the phrase the utterance is dropped; with it, its audio goes to the real STT (`/process/batch`) and the real text without the phrase is what ai-agent is asked (if the real STT fails, what the gate heard is used); the phrase alone is answered with `WAKE_ACK_MESSAGE` and the next sentence is accepted without the phrase, once, within `WAKE_FOLLOWUP_SECONDS`. Every request needs the phrase otherwise. Off (the default), nothing changes.
+
 **Sessions.** Each flow has its own `AgentFlowSession`, opened at startup best-effort (its failure never stops Brain), otherwise lazily, and re-established once on ai-agent's `SESSION_NOT_FOUND` (ai-agent keeps sessions in memory only).
 
 **Movements.** `BrainService.move_arms()` runs the movements of the flows that succeeded in order (`degrees` is signed: left 90 then left -90 returns the arm) and stops at the first failure. It is dispatched as a plain fire-and-forget `asyncio.create_task`, deliberately **not** tied to `VoicePipelineContext.tasks`, because `cancel_pending_tasks()` fires when the TTS/speaker work finishes, which can be faster than the HTTP round trip to the stepper. `HttpStepperAdapter` maps `left`/`right` to `STEPPER_LEFT_ARM_STEPPER_ID`/`STEPPER_RIGHT_ARM_STEPPER_ID`, converts degrees to full rotations (a negative number is sent as the same rotation in the opposite direction, because the stepper only reads the size of `rotations`) and uses the fixed `STEPPER_DEFAULT_RPM` (a directive carries no speed). A failed or refused move is returned as `StepperMoveResponseDto(success=False, ...)`, never raised; it never blocks or fails the spoken reply.
@@ -146,6 +148,12 @@ Environment variables (process environment, then the selected VS Code launch pro
 | `PROGRESS_RECEIVED_MESSAGE` | `Message received.` | Said at once when an utterance arrives (empty = silence) |
 | `PROGRESS_THINKING_MESSAGE` | `Thinking.` | Said while the flows run (empty = silence) |
 | `PROGRESS_THINKING_INTERVAL_SECONDS` | `2` | Interval of the thinking message (`0` = off) |
+| `WAKE_PHRASE_ENABLED` | `0` | `1` = answer only utterances in which the wake phrase is heard (needs `STT_GATE_ENABLED=1` in the STT service) |
+| `WAKE_PHRASE` | `Oblivion 306` | The phrase: a name plus a code, anywhere in the sentence; the code may be digits or words |
+| `WAKE_NAME_SIMILARITY` | `0.75` | How like the name a misheard word may be (0 to 1) |
+| `WAKE_FOLLOWUP_SECONDS` | `15` | After the phrase alone, the next sentence is taken without it, once, within this time (`0` = off) |
+| `WAKE_ACK_MESSAGE` | `Yes?` | Said when the phrase comes alone |
+| `STT_GATE_PATH_PREFIX` | `/gate` | Where the gate's routes are in the STT service |
 | `STEPPER_BASE_URL` | `http://127.0.0.1:8005` | stepper origin |
 | `STEPPER_ROTATE_ENDPOINT_TEMPLATE` | `/control/{stepper_id}/rotate` | Rotate route with a `{stepper_id}` placeholder |
 | `STEPPER_LEFT_ARM_STEPPER_ID` / `STEPPER_RIGHT_ARM_STEPPER_ID` | `stepper_1` / `stepper_2` | Which stepper id is the left/right arm |
@@ -155,7 +163,7 @@ Environment variables (process environment, then the selected VS Code launch pro
 | `MICROSERVICE_READY_POLL_INTERVAL_SECONDS` | `2` | Preflight poll interval |
 | `RUN_LIVE_MICROSERVICE_TESTS` | `0` | Test-only switch: `1` runs `tests/live` |
 
-`LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT`, `SERVICE_NAME` and `TRACE_EXPORT_*` are read by the shared logging package, not by Brain's config: see [`shared-logging/docs/logging.md`](../shared-logging/docs/logging.md). The `127.0.0.1` defaults only suit a single machine: on a multi-machine layout set every `*_BASE_URL` explicitly (the `deployment` tool does this from `robot.toml`).
+`LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT`, `SERVICE_NAME` and `TRACE_EXPORT_*` are read by the shared logging package, not by Brain's config: see [`shared-logging/docs/logging.md`](../shared-logging/docs/logging.md). The `127.0.0.1` defaults only suit a single machine: on a multi-machine layout set every `*_BASE_URL` explicitly (the `deployment` tool does this from the layout in `deployment/config/`).
 
 ## 8. Environment and logs
 

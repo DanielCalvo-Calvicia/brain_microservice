@@ -4,6 +4,9 @@ from fastapi import FastAPI
 from shared_logging import TracingMiddleware
 
 from application.services.brain_service import BrainService
+from application.services.voice_pipeline.wake import WakeSetup
+from domain.entities.wake_gate import WakeGate
+from domain.value_objects.wake_phrase_settings import WakePhraseSettings
 from composition_root.config import AppConfig
 from infrastructure.inbound.http.fastapi_adapter import FastApiAdapter
 from application.ports.outbound.agent_flow_port import AgentFlowPort
@@ -82,6 +85,7 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
             thinking=config.progress_thinking_message,
             interval_seconds=config.progress_thinking_interval_seconds,
         ),
+        wake=_wake_setup(config),
     )
     return BrainCoreDependency(
         service=service,
@@ -119,6 +123,26 @@ def generate_brain_dependency_from_core(core: BrainCoreDependency) -> BrainDepen
 
 def generate_brain_dependency(config: AppConfig) -> BrainDependency:
     return generate_brain_dependency_from_core(generate_brain_core_dependency(config))
+
+
+def _wake_setup(config: AppConfig) -> WakeSetup | None:
+    """The wake phrase, when enabled: the gate is the same STT service, under its own route prefix."""
+    if not config.wake_phrase_enabled:
+        return None
+    prefix = config.stt_gate_path_prefix
+    gate_stt_adapter = HttpSTTAdapter(
+        _http_config("stt", config.stt_base_url, config),
+        set_stream_endpoint=prefix + config.stt_set_stream_endpoint,
+        get_stream_endpoint=prefix + config.stt_get_stream_endpoint,
+        batch_endpoint=prefix + config.stt_batch_endpoint,  # the gate has no batch route; never used
+    )
+    settings = WakePhraseSettings(
+        phrase=config.wake_phrase,
+        name_similarity=config.wake_name_similarity,
+        followup_seconds=config.wake_followup_seconds,
+        ack_message=config.wake_ack_message,
+    )
+    return WakeSetup(gate=WakeGate(settings), gate_stt_port=gate_stt_adapter)
 
 
 def _http_config(name: str, base_url: str, config: AppConfig) -> HttpServiceConfig:

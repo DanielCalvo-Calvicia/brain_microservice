@@ -1,5 +1,7 @@
 import asyncio
-from collections.abc import AsyncIterator
+import base64
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from contracts.stream.codec import EventSequencer
@@ -14,8 +16,11 @@ from contracts.stream.schemas import STT_OUTBOUND
 from shared_logging import get_logger
 from domain.operations.text import clean_utterance
 
-from application.dtos.outbound_dtos import MotorDirectiveDto
+from application.dtos.outbound_dtos import MotorDirectiveDto, STTBatchRequestDto
+from application.ports.outbound.stt_port import STTPort
 from application.services.progress import run_with_progress
+from application.services.voice_pipeline.wake import WakeSetup
+from domain.entities.wake_gate import WakeVerdict
 
 from application.services.voice_pipeline.context import VoicePipelineContext
 from application.services.streams.async_stream_pipe import AsyncStreamPipe
@@ -61,10 +66,20 @@ class STTStreamToInternalStreamToTTSStream:
         stt_stream_out: AsyncIterator[bytes],
         tts_stream_in: AsyncStreamPipe[str],
         brain_service,
+        *,
+        wake: WakeSetup | None = None,
+        stt_port: STTPort | None = None,
+        sample_rate: int = 16000,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.stt_stream_out = stt_stream_out
         self.tts_stream_in = tts_stream_in
         self.brain_service = brain_service
+        # With the wake phrase, ``stt_stream_out`` comes from the gate STT and ``stt_port`` is the real one
+        self.wake = wake
+        self.stt_port = stt_port
+        self.sample_rate = sample_rate
+        self._clock = clock
         self.internal_stream = AsyncStreamPipe[BaseEvent[Any]]("stt-to-tts-text")
         self._context: VoicePipelineContext | None = None
         # Deliberately NOT context.tasks: a movement must survive this pipeline invocation's own
@@ -117,6 +132,10 @@ class STTStreamToInternalStreamToTTSStream:
                     text = clean_utterance(event.payload.output)
                     if text is None:
                         continue
+                    if self.wake is not None:
+                        text = await self._through_wake_gate(text, event.payload.audio_base64, say)
+                        if text is None:
+                            continue
                     logger.info(
                         "parsed STT completed text event",
                         event=event.sequence,
@@ -148,6 +167,38 @@ class STTStreamToInternalStreamToTTSStream:
             raise
         finally:
             await self.internal_stream.close()
+
+    async def _through_wake_gate(
+        self, heard: str, audio_base64: str, say: Callable[[str], Awaitable[None]]
+    ) -> str | None:
+        """What the robot was asked, or None when the utterance is not for it.
+
+        ``heard`` is what the gate STT understood. Without the phrase the utterance is dropped (never sent to the
+        real STT, so it costs nothing); the phrase alone is answered with the acknowledgement; otherwise the audio of
+        the utterance goes to the real STT and its text, without the phrase, is the question. If the real STT fails
+        or hears nothing, what the gate heard is used.
+        """
+        assert self.wake is not None
+        decision = self.wake.gate.evaluate(heard, self._clock())
+        if decision.verdict is WakeVerdict.IGNORE:
+            logger.info("utterance without the wake phrase ignored", chars=len(heard))
+            return None
+        if decision.verdict is WakeVerdict.ACKNOWLEDGE:
+            logger.info("wake phrase heard alone; waiting for the sentence that follows")
+            await say(self.wake.gate.settings.ack_message)
+            return None
+        command = decision.command
+        audio = base64.b64decode(audio_base64) if audio_base64 else b""
+        if audio and self.stt_port is not None:
+            try:
+                response = await self.stt_port.process_batch(STTBatchRequestDto(audio_data=audio, sample_rate=self.sample_rate))
+                real_text = clean_utterance(response.text)
+                if real_text is not None:
+                    command = self.wake.gate.command_from(real_text, command)
+            except Exception as exc:
+                logger.error("real STT failed on a wake-phrase utterance; using what the gate heard", error=str(exc))
+        logger.info("utterance for the robot", chars=len(command), audio_bytes=len(audio))
+        return clean_utterance(command)
 
     async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...]]:
         """What to say once every flow of ai-agent has ended (in order), and what to move (nothing, one movement
