@@ -181,10 +181,10 @@ class STTStreamToInternalStreamToTTSStream:
         assert self.wake is not None
         decision = self.wake.gate.evaluate(heard, self._clock())
         if decision.verdict is WakeVerdict.IGNORE:
-            logger.info("utterance without the wake phrase ignored", chars=len(heard))
+            logger.info("utterance without the wake phrase ignored", chars=len(heard), gate_heard=heard)
             return None
         if decision.verdict is WakeVerdict.ACKNOWLEDGE:
-            logger.info("wake phrase heard alone; waiting for the sentence that follows")
+            logger.info("wake phrase heard alone; waiting for the sentence that follows", gate_heard=heard)
             await say(self.wake.gate.settings.ack_message)
             return None
         command = decision.command
@@ -197,7 +197,7 @@ class STTStreamToInternalStreamToTTSStream:
                     command = self.wake.gate.command_from(real_text, command)
             except Exception as exc:
                 logger.error("real STT failed on a wake-phrase utterance; using what the gate heard", error=str(exc))
-        logger.info("utterance for the robot", chars=len(command), audio_bytes=len(audio))
+        logger.info("utterance for the robot", chars=len(command), audio_bytes=len(audio), gate_heard=heard)
         return clean_utterance(command)
 
     async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...]]:
