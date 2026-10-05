@@ -79,3 +79,11 @@ def test_the_answer_window_is_45_seconds_by_default_and_comes_from_the_environme
     assert load_config().wake_answer_seconds == 45.0
     monkeypatch.setenv("WAKE_ANSWER_SECONDS", "20")
     assert load_config().wake_answer_seconds == 20.0
+
+
+def test_the_echo_guard_margin_is_one_and_a_half_seconds_by_default_and_comes_from_the_environment(monkeypatch) -> None:
+    monkeypatch.delenv("ECHO_GUARD_SECONDS", raising=False)
+    assert load_config().echo_guard_seconds == 1.5
+    monkeypatch.setenv("ECHO_GUARD_SECONDS", "0")
+    assert load_config().echo_guard_seconds == 0.0
+    assert generate_brain_core_dependency(load_config()).service.voice_pipeline.echo_guard_seconds == 0.0

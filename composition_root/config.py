@@ -43,6 +43,7 @@ class AppConfig:
     wake_followup_seconds: float = 15.0
     wake_ack_message: str = "Yes?"
     wake_use_gate_stt: bool = True
+    echo_guard_seconds: float = 1.5
     wake_answer_seconds: float = 45.0
     stt_gate_path_prefix: str = "/gate"
 
@@ -134,6 +135,7 @@ def load_config() -> AppConfig:
         wake_followup_seconds=_float_env("WAKE_FOLLOWUP_SECONDS", 15.0),
         wake_ack_message=_text_env("WAKE_ACK_MESSAGE", "Yes?"),
         wake_answer_seconds=_float_env("WAKE_ANSWER_SECONDS", 45.0),
+        echo_guard_seconds=_float_env("ECHO_GUARD_SECONDS", 1.5),
         wake_use_gate_stt=_bool_env("WAKE_USE_GATE_STT", True),
         stt_gate_path_prefix=_text_env("STT_GATE_PATH_PREFIX", "/gate").rstrip("/"),
     )

@@ -20,6 +20,7 @@ from application.services.voice_pipeline.bridges.tts_to_speaker import TTSStream
 from application.services.voice_pipeline.steps.set_stt_stream import SetSTTStream
 from application.services.voice_pipeline.steps.set_tts_stream import SetTTSStream
 from application.services.voice_pipeline.steps.set_speaker_stream import SetSpeakerStream
+from domain.entities.echo_guard import EchoGuard
 from shared_logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,10 +37,12 @@ class VoicePipelineFlow:
         speaker_port: SpeakerPort,
         brain_service,
         wake: WakeSetup | None = None,
+        echo_guard_seconds: float = 0.0,
     ) -> None:
         self.microphone_port = microphone_port
         self.stt_port = stt_port
         self.wake = wake
+        self.echo_guard_seconds = echo_guard_seconds
         self.brain_service = brain_service
         self.health_route = CheckHealth(microphone_port, stt_port, tts_port, speaker_port)
         self.get_microphone_route = GetMicrophoneStream(microphone_port)
@@ -62,6 +65,7 @@ class VoicePipelineFlow:
             max_text_segments=request.max_text_segments,
         )
         context = VoicePipelineContext.create(request)
+        echo_guard = EchoGuard(self.echo_guard_seconds)  # what the robot says is not what the user says
         try:
             await self.health_route.run(context)
             await self.get_microphone_route.run(context)
@@ -75,6 +79,7 @@ class VoicePipelineFlow:
                 context.require_microphone_output().audio_stream,
                 context.require_stt_stream_in_pipe(),
                 expected_sample_rate=context.require_microphone_output().sample_rate,
+                echo_guard=echo_guard,
             )
             await mic_to_stt.run(context)
 
@@ -93,6 +98,7 @@ class VoicePipelineFlow:
                 context.require_speaker_stream_in_pipe(),
                 completed_outputs_to_read=request.max_text_segments if request.max_text_segments > 0 else None,
                 expected_format=(request.tts_sample_rate, request.speaker_channels),
+                echo_guard=echo_guard,
             )
             await tts_to_speaker.run(context)
             logger.info("all pipeline streams active - running until cancelled")

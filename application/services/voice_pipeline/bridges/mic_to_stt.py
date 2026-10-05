@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from contracts.stream.codec import EventSequencer
@@ -20,6 +21,7 @@ from contracts.stream.microservices.stt.inbound.utterance import (
 from contracts.stream.schemas import MICROPHONE_OUTBOUND
 from shared_logging import get_logger
 
+from domain.entities.echo_guard import EchoGuard
 from domain.errors import ExternalServiceInvalidResponseError
 from domain.operations.audio_format import microphone_mismatch
 
@@ -44,8 +46,14 @@ class MicStreamToInternalStreamToSTTStream:
         mic_stream_out: AsyncIterator[bytes],
         stt_stream_in: AsyncStreamPipe[bytes],
         expected_sample_rate: int | None = None,
+        *,
+        echo_guard: EchoGuard | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.expected_sample_rate = expected_sample_rate
+        # An utterance that overlaps the robot's own speech is the robot hearing itself: it never reaches STT
+        self.echo_guard = echo_guard
+        self._clock = clock
         self.mic_stream_out = mic_stream_out
         self.internal_stream = AsyncStreamPipe[BaseEvent[Any]]("mic-to-stt-audio")
         self.stt_stream_in = stt_stream_in
@@ -91,6 +99,8 @@ class MicStreamToInternalStreamToSTTStream:
                         encoded_chars=len(event.payload.bytes_base64),
                         sample_rate=event.payload.sample_rate,
                     )
+                    if self.echo_guard is not None and self._is_echo(event.payload):
+                        continue
                     await self.internal_stream.put(
                         events.next(
                             STTUtteranceInboundEvent,
@@ -127,6 +137,17 @@ class MicStreamToInternalStreamToSTTStream:
             raise
         finally:
             await self.internal_stream.close()
+
+    def _is_echo(self, utterance: Any) -> bool:
+        """Whether the utterance was captured while the robot spoke (it ends when it arrives, so it started a
+        duration earlier)."""
+        assert self.echo_guard is not None
+        seconds = len(utterance.bytes_base64) * 3 / 4 / (2 * utterance.sample_rate)
+        end = self._clock()
+        if not self.echo_guard.hears_itself(end - seconds, end):
+            return False
+        logger.info("utterance heard while the robot was speaking dropped", seconds=round(seconds, 1))
+        return True
 
     async def internal_stream_to_stt_stream(self) -> None:
         try:

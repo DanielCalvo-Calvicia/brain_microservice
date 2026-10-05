@@ -86,6 +86,7 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
             interval_seconds=config.progress_thinking_interval_seconds,
         ),
         wake=_wake_setup(config),
+        echo_guard_seconds=config.echo_guard_seconds,
     )
     return BrainCoreDependency(
         service=service,
