@@ -33,11 +33,12 @@ class AgentService:
         stepper_port: StepperPort,
         agent_flows: Sequence[AgentFlowPort] = (),
         progress: ProgressMessages | None = None,
+        speak_movements: bool = True,
     ) -> None:
         self.stepper_port = stepper_port
         # The flows of ai-agent, in the order they are run for every utterance. Without any Brain only echoes
         # nothing: there is nobody to decide what to say.
-        self.agent_flows = [AgentFlowSession(port) for port in agent_flows]
+        self.agent_flows = [AgentFlowSession(port, speak_movements) for port in agent_flows]
         # What Brain says while the flows work (see progress.py).
         self.progress = progress or ProgressMessages()
         # Who is asked next, and which flow waits for the user's answer (domain rules).
@@ -56,9 +57,10 @@ class AgentService:
 
     async def decide(self, text: str) -> AgentDecisionDto:
         """
-        What Brain does for one utterance: ai-agent's flows are asked one after the other, in order (each one
-        only when the one before has ended), so conversation-flow writes the reply and motion-flow, last, decides
-        the movements. Neither agent moves anything: the movements are returned here and Brain runs them.
+        What Brain does for one utterance: the agents are asked one after the other, in order (each one only when
+        the one before has ended). Production has ONE agent, ai-agent, which identifies the utterance and answers it
+        with one of its own flows (reply, task or movements). Nothing there moves anything: the movements are
+        returned here and Brain runs them.
 
         - What each flow says is kept, in order; the movements of the flows that succeeded are collected.
         - A flow that waits for the user (``awaiting_user_input``) stops the chain: the flows after it are not

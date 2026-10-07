@@ -11,12 +11,13 @@ from application.dtos.outbound_dtos import (
 
 
 class AgentFlowPort(Protocol):
-    """One flow of ai-agent (conversation-flow, motion-flow, ...). ai-agent only decides; it never controls
-    hardware, and Brain acts on what the flows return. Every flow has its own session and answers in the
-    same shape, so Brain can run any number of them in order."""
+    """An agent Brain asks for a decision: ai-agent (which identifies the utterance and answers it with one of its
+    own flows). It only decides; it never controls hardware, and Brain acts on what it returns. Each agent has its
+    own session and answers in the same shape, so Brain could ask several in order."""
 
-    @property
-    def name(self) -> str:
+    name: str
+
+    async def close(self) -> None:
         ...
 
     async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:

@@ -1,4 +1,4 @@
-from contracts.api.microservices.ai_agent.motion import AIAgentMotionMessageResponse
+from contracts.api.microservices.ai_agent.session import AIAgentMessageResponse
 
 from application.dtos.outbound_dtos import AgentFlowRequestDto, AgentFlowResultDto, MotorDirectiveDto
 from application.ports.outbound.agent_flow_port import AgentFlowPort
@@ -8,26 +8,29 @@ from infrastructure.outbound.http.ai_agent.agent_client import AIAgentFlowClient
 logger = get_logger(__name__)
 
 
-class HttpMotionFlowAdapter(AIAgentFlowClient, AgentFlowPort):
-    """motion-flow of ai-agent: which arm movements did the user ask for? It only decides; Brain runs them."""
+class HttpAIAgentAdapter(AIAgentFlowClient, AgentFlowPort):
+    """ai-agent: identifies the utterance and answers it with one of its flows (a plain reply, a task, or arm
+    movements). It only decides; Brain runs the movements."""
 
-    name = "motion-flow"
+    name = "ai-agent"
 
     async def message(self, request: AgentFlowRequestDto) -> AgentFlowResultDto:
-        logger.info("sending message to motion-flow", session_id=request.session_id, chars=len(request.message))
-        response = await self._post_message(request.session_id, request.message)
-        data = self._data_as(response, AIAgentMotionMessageResponse)
+        logger.info("sending message to ai-agent", session_id=request.session_id, chars=len(request.message),
+                    speak_movements=request.speak_movements)
+        response = await self._post_message(request.session_id, request.message, request.speak_movements)
+        data = self._data_as(response, AIAgentMessageResponse)
         # _data_as does not reconstruct nested dataclasses: data.directives is a list of plain dicts here.
         directives = tuple(MotorDirectiveDto(**directive) for directive in (data.directives or ()))
         logger.info(
-            "motion-flow answered",
+            "ai-agent answered",
+            flow=data.flow,
             success=data.success,
             directives=len(directives),
             awaiting_user_input=data.awaiting_user_input,
             error_code=data.error_code,
         )
         return AgentFlowResultDto(
-            flow=self.name,
+            flow=data.flow or self.name,
             success=data.success,
             spoken=data.response,
             directives=directives,

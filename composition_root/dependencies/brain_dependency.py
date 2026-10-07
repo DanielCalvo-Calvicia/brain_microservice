@@ -11,7 +11,7 @@ from composition_root.config import AppConfig
 from infrastructure.inbound.http.fastapi_adapter import FastApiAdapter
 from application.ports.outbound.agent_flow_port import AgentFlowPort
 from domain.value_objects.progress_messages import ProgressMessages
-from infrastructure.outbound.http.ai_agent.flow_adapters import build_flow_adapters
+from infrastructure.outbound.http.ai_agent.ai_agent_adapter import HttpAIAgentAdapter
 from infrastructure.outbound.http.http_client import HttpServiceConfig
 from infrastructure.outbound.http.microphone.microphone_adapter import HttpMicrophoneAdapter
 from infrastructure.outbound.http.speaker.speaker_adapter import HttpSpeakerAdapter
@@ -27,7 +27,7 @@ class BrainCoreDependency:
     stt_adapter: HttpSTTAdapter
     tts_adapter: HttpTTSAdapter
     speaker_adapter: HttpSpeakerAdapter
-    agent_flow_adapters: tuple[AgentFlowPort, ...]   # ai-agent's flows, in the order they are run
+    agent_flow_adapters: tuple[AgentFlowPort, ...]   # ai-agent (one adapter: it runs its own flows)
     stepper_adapter: HttpStepperAdapter
 
 
@@ -65,7 +65,7 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
         _http_config("speaker", config.speaker_base_url, config),
         play_stream_endpoint=config.speaker_play_stream_endpoint,
     )
-    agent_flow_adapters = build_flow_adapters(config.ai_agent_flows, _http_config("ai_agent", config.ai_agent_base_url, config))
+    agent_flow_adapters = (HttpAIAgentAdapter(_http_config("ai_agent", config.ai_agent_base_url, config)),)
     stepper_adapter = HttpStepperAdapter(
         _http_config("stepper", config.stepper_base_url, config),
         left_arm_stepper_id=config.stepper_left_arm_stepper_id,
@@ -87,6 +87,7 @@ def generate_brain_core_dependency(config: AppConfig) -> BrainCoreDependency:
         ),
         wake=_wake_setup(config),
         echo_guard_seconds=config.echo_guard_seconds,
+        speak_movements=config.ai_agent_speak_movements,
     )
     return BrainCoreDependency(
         service=service,

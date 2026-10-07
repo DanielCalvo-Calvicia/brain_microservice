@@ -19,6 +19,21 @@ async def test_start_stores_the_returned_session_id() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [True, False])
+async def test_the_speak_movements_setting_is_sent_with_every_message(setting) -> None:
+    flow = DiagnosticAIAgent(session_id="s1")
+    session = AgentFlowSession(flow, speak_movements=setting)
+
+    await session.ask("move your arm")
+
+    assert [request.speak_movements for request in flow.message_requests] == [setting]
+
+
+def test_a_movement_is_spoken_by_default() -> None:
+    assert AgentFlowSession(DiagnosticAIAgent()).speak_movements is True
+
+
+@pytest.mark.asyncio
 async def test_a_failing_start_does_not_raise() -> None:
     class _Down(DiagnosticAIAgent):
         async def start_session(self, request):

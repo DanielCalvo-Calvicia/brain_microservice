@@ -45,6 +45,7 @@ class BrainService(BrainServicePort):
         progress: ProgressMessages | None = None,
         wake: WakeSetup | None = None,
         echo_guard_seconds: float = 0.0,
+        speak_movements: bool = True,
     ) -> None:
         self.microphone_port = microphone_port
         self.stt_port = stt_port
@@ -53,7 +54,7 @@ class BrainService(BrainServicePort):
         self._health = HealthService(microphone_port, stt_port, tts_port, speaker_port)
         self._transcription = TranscriptionService(microphone_port, stt_port)
         self._playback = PlaybackService(tts_port, speaker_port)
-        self._agent = AgentService(stepper_port, agent_flows, progress)
+        self._agent = AgentService(stepper_port, agent_flows, progress, speak_movements)
         self.voice_pipeline = VoicePipelineFlow(microphone_port, stt_port, tts_port, speaker_port, self, wake, echo_guard_seconds)
 
     @property

@@ -21,9 +21,10 @@ class AgentFlowSession:
     the rules about it live in the domain entity ``flow``; this class does the calls.
     """
 
-    def __init__(self, port: AgentFlowPort) -> None:
+    def __init__(self, port: AgentFlowPort, speak_movements: bool = True) -> None:
         self.port = port
         self.flow = AgentFlow(port.name)
+        self.speak_movements = speak_movements      # Brain's setting, sent with every message
 
     @property
     def session_id(self) -> str | None:
@@ -69,7 +70,8 @@ class AgentFlowSession:
             await self.start()
         session_id = self.flow.require_session()
 
-        result = await self.port.message(AgentFlowRequestDto(session_id=session_id, message=text))
+        result = await self.port.message(
+            AgentFlowRequestDto(session_id=session_id, message=text, speak_movements=self.speak_movements))
         if not AgentFlow.lost_session(result.error_code):
             return result
 
@@ -78,4 +80,5 @@ class AgentFlowSession:
         await self.start()
         if not self.flow.has_session:
             return result
-        return await self.port.message(AgentFlowRequestDto(session_id=self.flow.require_session(), message=text))
+        return await self.port.message(AgentFlowRequestDto(
+            session_id=self.flow.require_session(), message=text, speak_movements=self.speak_movements))

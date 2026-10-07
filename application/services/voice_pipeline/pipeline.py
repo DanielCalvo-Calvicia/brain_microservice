@@ -157,5 +157,6 @@ async def _fail_fast(critical: list[asyncio.Task | None], watched: list[asyncio.
     while critical_tasks & pending:
         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            if not task.cancelled() and task.exception() is not None:
-                raise task.exception()
+            failure = None if task.cancelled() else task.exception()
+            if failure is not None:
+                raise failure

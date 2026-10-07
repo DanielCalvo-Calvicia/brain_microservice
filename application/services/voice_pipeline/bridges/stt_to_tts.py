@@ -36,11 +36,11 @@ _AI_AGENT_UNREACHABLE_APOLOGY = "Sorry, I could not reach my decision-making ser
 
 class STTStreamToInternalStreamToTTSStream:
     """STT outbound events -> one decision per utterance -> (internal stream of TTS inbound
-    events) -> TTS text input. The decision is ai-agent's flows together (BrainService.decide), asked one after
-    the other in the configured order: conversation-flow writes the reply and motion-flow, last, decides the
-    movements. While they run the user is never left in silence: `message received` is said as soon as the
-    utterance arrives, `thinking` every few seconds until every flow has ended (see `progress.py`), and only
-    then the answer is said and the movements are sent to the stepper.
+    events) -> TTS text input. The decision is ai-agent's (BrainService.decide): one call that identifies the
+    utterance and answers it with one of its flows (a reply, a task or arm movements). While it works the user is
+    never left in silence: `message received` is said as soon as the utterance arrives, `thinking` every few
+    seconds until ai-agent has answered (see `progress.py`), and only then the answer is said and the movements
+    are sent to the stepper.
 
     The microphone is what marks utterance boundaries (its silence detection, ``MICROPHONE_SILENCE_*``), so every
     STT ``completed`` event is one utterance, decided on the

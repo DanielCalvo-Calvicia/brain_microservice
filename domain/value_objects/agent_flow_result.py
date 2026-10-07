@@ -5,7 +5,7 @@ from domain.value_objects.motor_directive import MotorDirective
 
 @dataclass(frozen=True, slots=True)
 class AgentFlowResult:
-    """What one flow of ai-agent (conversation-flow, motion-flow, ...) decided for one utterance.
+    """What an agent (ai-agent) decided for one utterance; ``flow`` is the one of its flows that answered.
 
     ``spoken`` is what to say (always speakable: an apology when ``success`` is false, a question when
     ``awaiting_user_input``). ``directives`` are the movements to run, in order. ``awaiting_user_input``

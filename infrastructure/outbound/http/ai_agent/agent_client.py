@@ -18,18 +18,18 @@ USER_ID = "brain"  # ai-agent requires a caller user_id (min 3 chars); Brain is 
 
 
 class AIAgentFlowClient(HttpServiceClient):
-    """What the adapters of every flow of ai-agent share: the session routes and the JSON POST.
+    """What an adapter of ai-agent shares: the session routes and the JSON POST.
 
-    ai-agent gives each flow its own routes, ``/<flow name>/session/{start,message,end}``, and its own sessions.
-    A flow's adapter subclasses this, sets ``name`` and implements ``message`` (each flow answers with its own
-    contract; the adapter turns it into the common ``AgentFlowResultDto``).
+    ai-agent has one set of routes, ``/session/{start,message,end}``: it identifies every message and answers it with
+    one of its own flows. An adapter subclasses this, sets ``name`` and implements ``message`` (it turns the answer
+    of ai-agent's contract into the ``AgentFlowResultDto`` the services use).
     """
 
     name: str = ""
 
     def __init__(self, config: HttpServiceConfig, session_routes: str | None = None, client=None) -> None:
         super().__init__(config, client)
-        self._session_routes = (session_routes or f"/{self.name}/session").rstrip("/")
+        self._session_routes = (session_routes or "/session").rstrip("/")
 
     async def start_session(self, request: AIAgentStartSessionRequestDto) -> AIAgentStartSessionResponseDto:
         logger.info("starting ai-agent flow session", flow=self.name, username=request.username)
@@ -46,10 +46,10 @@ class AIAgentFlowClient(HttpServiceClient):
         data = self._data_as(response, AIAgentEndSessionResponse)
         return AIAgentEndSessionResponseDto(success=data.success, message=data.message or "")
 
-    async def _post_message(self, session_id: str, message: str) -> httpx.Response:
+    async def _post_message(self, session_id: str, message: str, speak_movements: bool = True) -> httpx.Response:
         return await self._post(
             f"{self._session_routes}/message",
-            {"user_id": USER_ID, "session_id": session_id, "message": message},
+            {"user_id": USER_ID, "session_id": session_id, "message": message, "speak_movements": speak_movements},
             "send message",
         )
 

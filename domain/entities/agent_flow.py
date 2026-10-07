@@ -4,7 +4,7 @@ SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
 
 
 class AgentFlow:
-    """One flow of ai-agent (conversation-flow, motion-flow, ...) and Brain's session with it.
+    """An agent Brain asks (today ai-agent) and Brain's session with it.
 
     ai-agent keeps sessions in memory only, so a restart loses them. The rules: a flow is asked only with a
     session, and a session ai-agent reports as not found is forgotten and opened again (once per question).

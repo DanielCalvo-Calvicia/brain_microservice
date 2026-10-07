@@ -115,20 +115,25 @@ class MotorDirectiveDto:
 
 @dataclass(frozen=True, slots=True)
 class AgentFlowRequestDto:
-    """One message for one flow of ai-agent (conversation-flow, motion-flow, ...)."""
+    """One message for ai-agent (it identifies the message and answers it with one of its flows).
+
+    ``speak_movements`` is Brain's setting: whether ai-agent words a short spoken line when a movement goes ahead.
+    """
 
     session_id: str
     message: str
+    speak_movements: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class AgentFlowResultDto:
-    """What one flow of ai-agent decided, in the same shape for every flow.
+    """What ai-agent decided for one utterance.
 
-    ``spoken`` is what to say (always speakable: an apology when ``success`` is false, a question when
-    ``awaiting_user_input``, a refusal for motion-flow). ``directives`` are the movements to run, in order
-    (only motion-flow sets them). ``awaiting_user_input`` says the flow is paused with a question for the user:
-    the next utterance is its answer.
+    ``flow`` is the flow of ai-agent that answered (identification, conversation, special or movement).
+    ``spoken`` is what to say (an apology when ``success`` is false, a question when ``awaiting_user_input``, a
+    refusal or a short announcement for a movement; empty when a movement is not to be spoken). ``directives`` are
+    the movements to run, in order (only the movement flow sets them). ``awaiting_user_input`` says ai-agent is
+    paused with a question for the user: the next utterance is its answer.
     """
 
     flow: str

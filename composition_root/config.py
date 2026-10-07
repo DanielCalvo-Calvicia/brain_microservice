@@ -25,7 +25,7 @@ class AppConfig:
     speaker_base_url: str
     speaker_play_stream_endpoint: str
     ai_agent_base_url: str
-    ai_agent_flows: tuple[str, ...]
+    ai_agent_speak_movements: bool
     progress_received_message: str
     progress_thinking_message: str
     progress_thinking_interval_seconds: float
@@ -107,10 +107,10 @@ def load_config() -> AppConfig:
             fallback_env_name="SPEAKER_STREAM_ENDPOINT",
         ),
         ai_agent_base_url=_base_url("AI_AGENT_BASE_URL", "http://127.0.0.1:7998"),
-        # ai-agent hosts several flows (agents), each with its own routes /<flow>/session/{start,message,end}.
-        # They are asked one after the other, in this order, for every utterance: the first writes the reply,
-        # the last decides the movements.
-        ai_agent_flows=_list_env("AI_AGENT_FLOWS", ("conversation-flow", "motion-flow")),
+        # ai-agent identifies every utterance and answers it with one of its flows. Whether it words a short spoken
+        # line when a movement goes ahead ("Turning my left arm 90 degrees") is decided here: with false a movement
+        # is silent (a refusal or a question is always said).
+        ai_agent_speak_movements=_bool_env("AI_AGENT_SPEAK_MOVEMENTS", True),
         # What Brain says while the flows work: at once when an utterance arrives, then every N seconds.
         progress_received_message=_text_env("PROGRESS_RECEIVED_MESSAGE", "Message received."),
         progress_thinking_message=_text_env("PROGRESS_THINKING_MESSAGE", "Thinking."),
@@ -153,13 +153,6 @@ def _float_env(name: str, default: float) -> float:
     if value is None or value == "":
         return default
     return float(value)
-
-
-def _list_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
 def _text_env(name: str, default: str) -> str:

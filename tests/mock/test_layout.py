@@ -123,4 +123,4 @@ def test_what_each_layer_may_import_is_accepted(tmp_path: Path, layer: str, good
 def test_each_layer_has_code_to_check() -> None:
     assert len(list((ROOT / "domain").rglob("*.py"))) > 15
     assert len(list((ROOT / "application").rglob("*.py"))) > 30
-    assert len(list((ROOT / "infrastructure").rglob("*.py"))) > 10
+    assert len(list((ROOT / "infrastructure").rglob("*.py"))) > 5

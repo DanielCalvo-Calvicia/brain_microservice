@@ -7,7 +7,7 @@ DIRECTIONS = ("forward", "reverse")
 
 @dataclass(frozen=True, slots=True)
 class MotorDirective:
-    """One arm movement ai-agent's motion-flow decided: which arm, how many degrees, in which direction.
+    """One arm movement ai-agent's movement flow decided: which arm, how many degrees, in which direction.
 
     ``degrees`` is signed: "left 90" then "left -90" brings the arm back. Brain, never ai-agent, runs it.
     """
