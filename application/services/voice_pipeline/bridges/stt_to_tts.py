@@ -23,6 +23,7 @@ from application.services.voice_pipeline.wake import WakeSetup
 from domain.entities.wake_gate import WakeVerdict
 
 from application.services.voice_pipeline.context import VoicePipelineContext
+from application.services.voice_pipeline.speech_cues import SpeechCues
 from application.services.streams.async_stream_pipe import AsyncStreamPipe
 from application.services.streams.events import raise_for_stream_error, sse_events
 
@@ -68,6 +69,7 @@ class STTStreamToInternalStreamToTTSStream:
         brain_service,
         *,
         wake: WakeSetup | None = None,
+        speech_cues: SpeechCues | None = None,
         stt_port: STTPort | None = None,
         sample_rate: int = 16000,
         clock: Callable[[], float] = time.monotonic,
@@ -77,6 +79,9 @@ class STTStreamToInternalStreamToTTSStream:
         self.brain_service = brain_service
         # With the wake phrase, ``stt_stream_out`` comes from the gate STT and ``stt_port`` is the real one
         self.wake = wake
+        # A gesture starts when the reply starts to be spoken: this is told which text it is, the TTS bridge says when it plays
+        self.speech_cues = speech_cues
+        self._texts_said = 0
         self.stt_port = stt_port
         self.sample_rate = sample_rate
         self._clock = clock
@@ -109,6 +114,7 @@ class STTStreamToInternalStreamToTTSStream:
                 """One spoken utterance for TTS: an acknowledgement, a thinking message or (part of) the answer."""
                 if clean_utterance(spoken_text) is None:
                     return
+                self._texts_said += 1
                 completed_event = events.next(
                     TTSCompletedInboundEvent,
                     TTSCompletedInboundEventDTO(reason="completed", output=spoken_text),
@@ -146,10 +152,13 @@ class STTStreamToInternalStreamToTTSStream:
                     # have ended say the answer and send the movements to the stepper.
                     progress = self.brain_service.progress
                     await say(progress.received)
-                    spoken, directives, awaiting_answer = await run_with_progress(self._decide(text), say, progress)
+                    spoken, directives, awaiting_answer, gesture = await run_with_progress(self._decide(text), say, progress)
+                    if directives and gesture:
+                        # starts with the speech: the first text of the reply is the next one to be sent to TTS
+                        self._gesture_with_speech(directives, self._texts_said + 1, bool(spoken))
                     for part in spoken:
                         await say(part)
-                    if directives:
+                    if directives and not gesture:
                         self._dispatch_moves(directives)
                     if awaiting_answer and self.wake is not None:
                         # an agent asked a question: its answer needs no wake phrase
@@ -203,7 +212,7 @@ class STTStreamToInternalStreamToTTSStream:
         logger.info("utterance for the robot", chars=len(command), audio_bytes=len(audio), gate_heard=heard)
         return clean_utterance(command)
 
-    async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...], bool]:
+    async def _decide(self, text: str) -> tuple[tuple[str, ...], tuple[MotorDirectiveDto, ...], bool, bool]:
         """What to say once every flow of ai-agent has ended (in order), and what to move (nothing, one movement
         or a sequence), and whether an agent is waiting for the user's answer. ``text`` is one already-stripped, non-empty utterance: the caller never invokes this for
         a blank completed event."""
@@ -211,11 +220,26 @@ class STTStreamToInternalStreamToTTSStream:
             decision = await self.brain_service.decide(text)
         except Exception as exc:
             logger.error("ai-agent call failed; falling back to a fixed apology", error=str(exc))
-            return (_AI_AGENT_UNREACHABLE_APOLOGY,), (), False
+            return (_AI_AGENT_UNREACHABLE_APOLOGY,), (), False, False
         spoken = decision.spoken
         if not spoken and decision.failed_flows:
             spoken = (_AI_AGENT_UNREACHABLE_APOLOGY,)
-        return spoken, decision.directives, decision.awaiting_user_input
+        return spoken, decision.directives, decision.awaiting_user_input, decision.gesture
+    def _gesture_with_speech(self, directives: tuple[MotorDirectiveDto, ...], text_number: int, will_speak: bool) -> None:
+        """The gesture starts when text number ``text_number`` (the reply) starts to play. With nothing to say, or nobody
+        to tell when it plays, it starts at once."""
+        if not will_speak or self.speech_cues is None:
+            self._dispatch_gesture(directives, 0.0)
+            return
+        self.speech_cues.expect(text_number, lambda delay: self._dispatch_gesture(directives, delay))
+
+    def _dispatch_gesture(self, directives: tuple[MotorDirectiveDto, ...], delay_seconds: float) -> None:
+        """Fire-and-forget, like a movement the user asked for: the gesture outlives the speech and the run."""
+        logger.info("starting the gesture with the speech", movements=len(directives), delay_seconds=round(delay_seconds, 2))
+        task = asyncio.create_task(self.brain_service.run_gesture(directives, delay_seconds), name="gesture")
+        self._background_moves.add(task)
+        task.add_done_callback(self._background_moves.discard)
+
     def _dispatch_moves(self, directives: tuple[MotorDirectiveDto, ...]) -> None:
         """Fire-and-forget: move_arms() runs the sequence in order and already swallows and logs its own
         failures, and a movement must never block, fail or be cut off by the spoken reply's own pipeline

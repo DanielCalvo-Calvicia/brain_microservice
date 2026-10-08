@@ -28,6 +28,7 @@ class HttpAIAgentAdapter(AIAgentFlowClient, AgentFlowPort):
             directives=len(directives),
             awaiting_user_input=data.awaiting_user_input,
             error_code=data.error_code,
+            gesture=bool(data.gesture),
         )
         return AgentFlowResultDto(
             flow=data.flow or self.name,
@@ -35,5 +36,6 @@ class HttpAIAgentAdapter(AIAgentFlowClient, AgentFlowPort):
             spoken=data.response,
             directives=directives,
             awaiting_user_input=data.awaiting_user_input,
+            gesture=bool(data.gesture),
             error_code=data.error_code,
         )

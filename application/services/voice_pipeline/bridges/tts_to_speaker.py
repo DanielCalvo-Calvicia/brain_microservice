@@ -26,6 +26,7 @@ from domain.operations.audio_format import stream_mismatch
 from domain.value_objects.audio_format import AudioFormat
 
 from application.services.voice_pipeline.context import VoicePipelineContext
+from application.services.voice_pipeline.speech_cues import SpeechCues
 from application.services.streams.async_stream_pipe import AsyncStreamPipe
 from application.services.streams.events import ndjson_events, raise_for_stream_error, stage_encoder
 
@@ -47,12 +48,16 @@ class TTSStreamToInternalStreamToSpeakerStream:
         expected_format: tuple[int, int] | None = None,
         *,
         echo_guard: EchoGuard | None = None,
+        speech_cues: SpeechCues | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.expected_format = expected_format  # (sample_rate, channels) Brain asked TTS for
         self.echo_guard = echo_guard  # told how long the robot speaks, so the microphone can tell its echo
         self._clock = clock
         self._bytes_per_second = 0
+        # What waits for the start of a text to play (a gesture), and how many texts have started (or been skipped) so far
+        self.speech_cues = speech_cues
+        self._texts_begun = 0
         self.tts_stream_out = tts_stream_out
         self.internal_stream = AsyncStreamPipe[BaseEvent[Any]]("tts-to-speaker-audio")
         self.speaker_stream_in = speaker_stream_in
@@ -87,8 +92,11 @@ class TTSStreamToInternalStreamToSpeakerStream:
                         )
                     )
                 elif event.type is EventType.PARTIAL:
+                    if not segment_has_partials:
+                        self._text_begins(self._note_speech(event.payload.bytes_base64))
+                    else:
+                        self._note_speech(event.payload.bytes_base64)
                     segment_has_partials = True
-                    self._note_speech(event.payload.bytes_base64)
                     await self.internal_stream.put(
                         events.next(
                             SpeakerPartialInboundEvent,
@@ -98,7 +106,7 @@ class TTSStreamToInternalStreamToSpeakerStream:
                 elif event.type is EventType.COMPLETED:
                     if not segment_has_partials and event.payload.output_bytes_base64:
                         # No incremental audio was sent for this text: deliver it from ``completed``.
-                        self._note_speech(event.payload.output_bytes_base64)
+                        self._text_begins(self._note_speech(event.payload.output_bytes_base64))
                         await self.internal_stream.put(
                             events.next(
                                 SpeakerPartialInboundEvent,
@@ -129,6 +137,8 @@ class TTSStreamToInternalStreamToSpeakerStream:
                             code=event.payload.code,
                             message=event.payload.message,
                         )
+                        if not segment_has_partials:
+                            self._text_is_skipped()                    # this text will never play
                         segment_has_partials = False
                         continue
                     raise_for_stream_error(event, service_name="tts")
@@ -143,9 +153,24 @@ class TTSStreamToInternalStreamToSpeakerStream:
         finally:
             await self.internal_stream.close()
 
-    def _note_speech(self, encoded_audio: str) -> None:
-        if self.echo_guard is not None and self._bytes_per_second > 0:
-            self.echo_guard.robot_speaks(self._clock(), len(encoded_audio) * 3 / 4 / self._bytes_per_second)
+    def _note_speech(self, encoded_audio: str) -> float:
+        """Notes the audio the robot is about to play; returns how long from now it starts to play (the speaker may
+        still be playing what came before it)."""
+        if self.echo_guard is None or self._bytes_per_second <= 0:
+            return 0.0
+        now = self._clock()
+        starts = self.echo_guard.robot_speaks(now, len(encoded_audio) * 3 / 4 / self._bytes_per_second)
+        return max(0.0, starts - now)
+
+    def _text_begins(self, delay_seconds: float) -> None:
+        self._texts_begun += 1
+        if self.speech_cues is not None:
+            self.speech_cues.began(self._texts_begun, delay_seconds)
+
+    def _text_is_skipped(self) -> None:
+        self._texts_begun += 1
+        if self.speech_cues is not None:
+            self.speech_cues.skipped(self._texts_begun)
 
     async def internal_stream_to_speaker_stream(self) -> None:
         try:

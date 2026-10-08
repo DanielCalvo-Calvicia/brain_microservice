@@ -252,8 +252,10 @@ class DiagnosticFlow:
         error_code: str | None = None,
         delay: float = 0.0,
         available: bool = True,
+        gesture: bool = False,
     ) -> None:
         self.name = name
+        self.gesture = gesture
         self.available = available
         self.session_id = session_id
         self.spoken = spoken
@@ -287,6 +289,7 @@ class DiagnosticFlow:
             directives=self.directives,
             awaiting_user_input=self.awaiting_user_input,
             error_code=self.error_code,
+            gesture=self.gesture,
         )
 
     async def end_session(self, request: AIAgentEndSessionRequestDto) -> AIAgentEndSessionResponseDto:

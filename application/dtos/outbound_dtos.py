@@ -111,6 +111,7 @@ class MotorDirectiveDto:
     arm: str
     degrees: float
     direction: str
+    pause_seconds: float = 0.0  # wait this long after the previous movement ends before starting this one
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +142,7 @@ class AgentFlowResultDto:
     spoken: str = ""
     directives: tuple[MotorDirectiveDto, ...] = ()
     awaiting_user_input: bool = False
+    gesture: bool = False  # the directives are an expressive gesture for the spoken reply, not a movement asked for
     error_code: str | None = None
 
 @dataclass(frozen=True, slots=True)

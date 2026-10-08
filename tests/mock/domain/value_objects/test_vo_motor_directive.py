@@ -38,3 +38,13 @@ def test_it_is_immutable_and_compares_by_value() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         directive.degrees = 1.0  # type: ignore[misc]
     assert directive == MotorDirective("left", 90.0, "forward")
+
+def test_a_directive_starts_at_once_unless_it_has_a_pause() -> None:
+    assert MotorDirective("left", 10.0).pause_seconds == 0.0
+    assert MotorDirective("left", 10.0, pause_seconds=0.8).pause_seconds == 0.8
+
+
+@pytest.mark.parametrize("pause", [-0.1, float("nan"), float("inf")])
+def test_a_pause_is_a_finite_time_that_is_not_negative(pause: float) -> None:
+    with pytest.raises(ValueError, match="pause_seconds"):
+        MotorDirective("left", 10.0, pause_seconds=pause)

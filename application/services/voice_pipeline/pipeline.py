@@ -9,6 +9,7 @@ from application.ports.outbound.tts_port import TTSPort
 from application.services.microphone_lifecycle import stop_microphone_safely
 from application.services.voice_pipeline.context import VoicePipelineContext
 from application.services.voice_pipeline.verification import verify_speaker_response
+from application.services.voice_pipeline.speech_cues import SpeechCues
 from application.services.voice_pipeline.wake import WakeSetup
 from application.services.voice_pipeline.steps.health_check import CheckHealth
 from application.services.voice_pipeline.steps.get_mic_stream import GetMicrophoneStream
@@ -66,6 +67,7 @@ class VoicePipelineFlow:
         )
         context = VoicePipelineContext.create(request)
         echo_guard = EchoGuard(self.echo_guard_seconds)  # what the robot says is not what the user says
+        speech_cues = SpeechCues()  # lets a gesture start when the robot starts to speak
         try:
             await self.health_route.run(context)
             await self.get_microphone_route.run(context)
@@ -88,6 +90,7 @@ class VoicePipelineFlow:
                 context.require_tts_stream_in_pipe(),
                 self.brain_service,
                 wake=self.wake,
+                speech_cues=speech_cues,
                 stt_port=self.stt_port,
                 sample_rate=context.require_microphone_output().sample_rate,
             )
@@ -99,6 +102,7 @@ class VoicePipelineFlow:
                 completed_outputs_to_read=request.max_text_segments if request.max_text_segments > 0 else None,
                 expected_format=(request.tts_sample_rate, request.speaker_channels),
                 echo_guard=echo_guard,
+                speech_cues=speech_cues,
             )
             await tts_to_speaker.run(context)
             logger.info("all pipeline streams active - running until cancelled")

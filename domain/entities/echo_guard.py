@@ -3,7 +3,9 @@ class EchoGuard:
 
     The robot's own voice comes back through the microphone. An utterance that overlaps the time the robot spoke
     (or the ``margin_seconds`` after it, while the sound dies away) is the robot hearing itself, not the user.
-    Times are the caller's clock in seconds. A margin of 0 or less turns the guard off.
+    It also knows the playback queue: speech sent while the robot is still speaking plays after it, and
+    ``robot_speaks`` says when. Times are the caller's clock in seconds. A margin of 0 or less turns the guard off
+    (``hears_itself`` is then always false) but the queue is still followed.
     """
 
     _KEEP_SECONDS = 120.0
@@ -16,15 +18,22 @@ class EchoGuard:
     def enabled(self) -> bool:
         return self._margin > 0
 
-    def robot_speaks(self, now: float, seconds: float) -> None:
-        """The robot is sent ``seconds`` of speech at ``now``: it plays after whatever is already playing."""
-        if not self.enabled or seconds <= 0:
-            return
+    def robot_speaks(self, now: float, seconds: float) -> float:
+        """The robot is sent ``seconds`` of speech at ``now``: it plays after whatever is already playing.
+
+        Returns when this speech starts to play (``now`` when the robot was quiet, later when it was still speaking).
+        """
+        if seconds <= 0:
+            return now
         if self._spoken and now <= self._spoken[-1][1]:
+            start = self._spoken[-1][1]
             self._spoken[-1][1] += seconds  # queued behind what is playing
         else:
+            start = now
             self._spoken.append([now, now + seconds])
-        self._spoken = [span for span in self._spoken if span[1] + self._margin >= now - self._KEEP_SECONDS]
+        keep_from = now - self._KEEP_SECONDS
+        self._spoken = [span for span in self._spoken if span[1] + max(self._margin, 0.0) >= keep_from]
+        return start
 
     def hears_itself(self, start: float, end: float) -> bool:
         """Whether audio captured from ``start`` to ``end`` overlaps the robot's speech or the margin after it."""

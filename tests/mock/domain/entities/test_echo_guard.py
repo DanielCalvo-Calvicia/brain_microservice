@@ -57,3 +57,23 @@ def test_old_speech_is_forgotten() -> None:
     guard.robot_speaks(now=500.0, seconds=2.0)
 
     assert guard.hears_itself(0.0, 1.0) is False
+
+
+def test_robot_speaks_says_when_the_speech_starts_to_play() -> None:
+    guard = EchoGuard(1.0)
+
+    assert guard.robot_speaks(now=10.0, seconds=4.0) == 10.0      # quiet robot: at once
+    assert guard.robot_speaks(now=11.0, seconds=3.0) == 14.0      # still speaking until 14: it plays after
+    assert guard.robot_speaks(now=30.0, seconds=1.0) == 30.0      # quiet again
+
+
+def test_the_queue_is_followed_even_when_the_guard_is_off() -> None:
+    guard = EchoGuard(0)
+
+    assert guard.robot_speaks(now=10.0, seconds=4.0) == 10.0
+    assert guard.robot_speaks(now=11.0, seconds=2.0) == 14.0
+    assert guard.hears_itself(10.0, 14.0) is False                # off: nothing is ever taken for an echo
+
+
+def test_speech_of_no_length_starts_now() -> None:
+    assert EchoGuard(1.0).robot_speaks(now=5.0, seconds=0.0) == 5.0

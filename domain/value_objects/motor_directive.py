@@ -15,6 +15,7 @@ class MotorDirective:
     arm: str
     degrees: float
     direction: str = "forward"
+    pause_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if self.arm not in ARMS:
@@ -23,3 +24,5 @@ class MotorDirective:
             raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}")
         if not math.isfinite(self.degrees):
             raise ValueError("degrees must be a finite number")
+        if not math.isfinite(self.pause_seconds) or self.pause_seconds < 0:
+            raise ValueError("pause_seconds must be a finite number that is not negative")

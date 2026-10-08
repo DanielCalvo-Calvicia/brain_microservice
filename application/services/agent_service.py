@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
 
@@ -44,6 +45,9 @@ class AgentService:
         # Who is asked next, and which flow waits for the user's answer (domain rules).
         self._dialogue = AgentDialogue([session.flow for session in self.agent_flows])
         self._sessions_by_flow = {id(session.flow): session for session in self.agent_flows}
+        # The arms do one sequence at a time: a movement the user asked for waits for the one before it, and a gesture
+        # that finds the arms busy is not run at all (it would start late, and half a gesture leaves an arm off its place).
+        self._arms = asyncio.Lock()
 
     async def start_agent_sessions(self) -> None:
         """One session per flow of ai-agent, best-effort: a failure here does not stop Brain from starting
@@ -100,11 +104,31 @@ class AgentService:
             return StepperMoveResponseDto(success=False, message=str(exc))
 
     async def move_arms(self, directives: tuple[MotorDirectiveDto, ...]) -> list[StepperMoveResponseDto]:
-        """Runs a movement sequence in order, one movement after the other. It stops at the first one that
-        fails: going on would leave the arm somewhere the sequence did not intend ("left 90" refused, then
-        "left -90" would turn it the wrong way)."""
+        """Runs a movement sequence the user asked for, in order, one movement after the other, as soon as the arms
+        are free. It stops at the first one that fails: going on would leave the arm somewhere the sequence did not
+        intend ("left 90" refused, then "left -90" would turn it the wrong way)."""
+        async with self._arms:
+            return await self._run_sequence(directives)
+
+    async def run_gesture(
+        self, directives: tuple[MotorDirectiveDto, ...], delay_seconds: float = 0.0
+    ) -> list[StepperMoveResponseDto]:
+        """Runs the gesture that goes with a spoken reply, ``delay_seconds`` from now (when the robot starts to
+        speak), with the pauses its movements carry. When the arms are still busy with an earlier sequence the gesture
+        is skipped: it would no longer start with the speech, and the reply is spoken anyway."""
+        if self._arms.locked():
+            logger.info("gesture skipped: the arms are still busy", movements=len(directives))
+            return []
+        async with self._arms:
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            return await self._run_sequence(directives)
+
+    async def _run_sequence(self, directives: tuple[MotorDirectiveDto, ...]) -> list[StepperMoveResponseDto]:
         results: list[StepperMoveResponseDto] = []
         for directive in directives:
+            if directive.pause_seconds > 0:
+                await asyncio.sleep(directive.pause_seconds)
             result = await self.move_arm(directive)
             results.append(result)
             if not continues_after(result.success):

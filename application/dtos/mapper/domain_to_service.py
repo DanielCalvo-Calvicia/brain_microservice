@@ -5,7 +5,9 @@ from domain.value_objects.motor_directive import MotorDirective
 
 
 def to_directive_dto(directive: MotorDirective) -> MotorDirectiveDto:
-    return MotorDirectiveDto(arm=directive.arm, degrees=directive.degrees, direction=directive.direction)
+    return MotorDirectiveDto(
+        arm=directive.arm, degrees=directive.degrees, direction=directive.direction, pause_seconds=directive.pause_seconds
+    )
 
 
 def to_decision_dto(decision: AgentDecision) -> AgentDecisionDto:
@@ -13,4 +15,5 @@ def to_decision_dto(decision: AgentDecision) -> AgentDecisionDto:
         spoken=decision.spoken,
         directives=tuple(to_directive_dto(directive) for directive in decision.directives),
         failed_flows=decision.failed_flows,
+        gesture=decision.gesture,
     )

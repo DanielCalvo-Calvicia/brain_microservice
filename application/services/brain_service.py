@@ -112,3 +112,8 @@ class BrainService(BrainServicePort):
 
     async def move_arms(self, directives: tuple[MotorDirectiveDto, ...]) -> list[StepperMoveResponseDto]:
         return await self._agent.move_arms(directives)
+
+    async def run_gesture(
+        self, directives: tuple[MotorDirectiveDto, ...], delay_seconds: float = 0.0
+    ) -> list[StepperMoveResponseDto]:
+        return await self._agent.run_gesture(directives, delay_seconds)

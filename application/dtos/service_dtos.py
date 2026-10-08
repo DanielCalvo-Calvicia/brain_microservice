@@ -14,6 +14,7 @@ class AgentDecisionDto:
     directives: tuple[MotorDirectiveDto, ...] = ()
     failed_flows: tuple[str, ...] = ()
     awaiting_user_input: bool = False  # a flow asked the user a question: the next utterance is its answer
+    gesture: bool = False  # the directives are an expressive gesture for what is spoken, not movements asked for
 
 @dataclass(frozen=True, slots=True)
 class HealthCheckServiceResponseDto:

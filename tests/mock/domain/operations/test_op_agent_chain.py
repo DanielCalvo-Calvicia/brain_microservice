@@ -51,3 +51,30 @@ def test_the_apology_is_spoken_only_when_nobody_said_anything_and_a_flow_failed(
     assert final_spoken(nothing_said_a_flow_failed, "Sorry.") == ("Sorry.",)
     assert final_spoken(AgentDecision(spoken=("Hi.",), failed_flows=("motion-flow",)), "Sorry.") == ("Hi.",)
     assert final_spoken(AgentDecision(), "Sorry.") == ()             # nothing said, nothing failed: silence
+
+def test_movements_a_flow_marked_as_a_gesture_make_a_gesture() -> None:
+    decision = fold([AgentFlowResult("ai-agent", True, spoken="How wonderful!", directives=(LEFT_90, LEFT_BACK), gesture=True)])
+    assert decision.gesture is True and decision.directives == (LEFT_90, LEFT_BACK)
+
+
+def test_movements_the_user_asked_for_are_not_a_gesture() -> None:
+    decision = fold([AgentFlowResult("ai-agent", True, spoken="Turning.", directives=(LEFT_90,))])
+    assert decision.gesture is False
+
+
+def test_nothing_to_move_is_not_a_gesture_even_if_the_flow_says_so() -> None:
+    assert fold([AgentFlowResult("ai-agent", True, spoken="Hello.", gesture=True)]).gesture is False
+    assert fold([]).gesture is False
+
+
+def test_a_gesture_that_failed_moves_nothing_and_is_not_a_gesture() -> None:
+    decision = fold([AgentFlowResult("ai-agent", False, spoken="Sorry.", directives=(LEFT_90,), gesture=True)])
+    assert decision.directives == () and decision.gesture is False
+
+
+def test_movements_are_a_gesture_only_when_everything_that_moves_says_so() -> None:
+    decision = fold([
+        AgentFlowResult("a", True, spoken="x", directives=(LEFT_90,), gesture=True),
+        AgentFlowResult("b", True, spoken="y", directives=(LEFT_BACK,)),
+    ])
+    assert decision.gesture is False        # a movement the user asked for is never held back to the speech

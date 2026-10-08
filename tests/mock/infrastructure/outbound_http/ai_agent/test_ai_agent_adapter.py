@@ -165,3 +165,34 @@ async def test_a_question_for_the_user_is_marked_as_awaiting_an_answer() -> None
     assert result.awaiting_user_input is True
     assert result.spoken == "How many degrees?" and result.directives == ()
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_gesture_with_pauses_is_read_with_its_flag() -> None:
+    answer = _answer(
+        response="That is wonderful news!", flow="conversation", gesture=True,
+        directives=[
+            {"arm": "left", "degrees": 60.0, "direction": "forward", "pause_seconds": 0.0},
+            {"arm": "right", "degrees": -45.0, "direction": "reverse", "pause_seconds": 0.8},
+        ],
+    )
+    client = _client(lambda request: httpx.Response(200, json=answer))
+
+    result = await HttpAIAgentAdapter(CONFIG, client=client).message(AgentFlowRequestDto(session_id="s1", message="I got a puppy!"))
+
+    assert result.gesture is True
+    assert [d.pause_seconds for d in result.directives] == [0.0, 0.8]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_movement_the_user_asked_for_is_not_a_gesture_and_an_old_answer_without_the_new_fields_still_reads() -> None:
+    answer = _answer(flow="movement", directives=[{"arm": "left", "degrees": 90.0, "direction": "forward"}])
+    answer["data"].pop("gesture", None)
+    client = _client(lambda request: httpx.Response(200, json=answer))
+
+    result = await HttpAIAgentAdapter(CONFIG, client=client).message(AgentFlowRequestDto(session_id="s1", message="move"))
+
+    assert result.gesture is False
+    assert result.directives == (MotorDirectiveDto(arm="left", degrees=90.0, direction="forward"),)
+    await client.aclose()

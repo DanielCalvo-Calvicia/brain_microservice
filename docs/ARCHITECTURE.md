@@ -86,7 +86,7 @@ know which comes next; all shared state moves through the context.
 `AgentService.decide()` asks ai-agent's flows (`AI_AGENT_FLOWS`, in order). The state and the rules are domain:
 `AgentFlow` (session), `AgentDialogue` (who is asked next, the flow that waits for the user's answer) and
 `agent_chain.fold` (what is said, the movements of the flows that succeeded, the flows that failed). The application only
-does the calls and the mapping. Movements run through `move_arms()`, which stops at the first failure
+does the calls and the mapping. Movements the user asked for run through `move_arms()`, and a gesture that goes with a reply through `run_gesture()` when the reply starts to play (`speech_cues.py`); both stop at the first failure
 (`movement.continues_after`); the stepper adapter turns degrees into rotations and a direction with `movement.rotation_of`.
 
 ## Where each rule lives
