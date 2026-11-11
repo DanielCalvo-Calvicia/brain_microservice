@@ -34,6 +34,11 @@ class LaunchEnvironmentSummary:
 
 
 def apply_launch_environment(workspace_root: Path) -> LaunchEnvironmentSummary:
+    """Apply a VS Code launch profile (``.vscode/launch.json``) only when this process was started by VS Code, which sets
+    ``VSCODE_LAUNCH_PROFILE`` itself. ``launch.json`` is tracked in git, so a deployed clone has it too: without this guard
+    its first profile would override the ``APP_ENV`` of the ``.env`` (decision Q02)."""
+    if not os.getenv(PROFILE_VARIABLE):
+        return LaunchEnvironmentSummary(None, None, 0, 0)
     profiles = _load_launch_profiles(workspace_root / ".vscode" / "launch.json")
     profile = _select_launch_profile(profiles)
     if profile is None:

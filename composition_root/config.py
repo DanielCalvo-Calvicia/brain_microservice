@@ -2,6 +2,22 @@ import os
 from dataclasses import dataclass
 
 from composition_root.environment import resolve_runtime_environment
+from domain.value_objects.unset_base_url import UnsetBaseUrl
+
+
+# The six services Brain calls and the origin it falls back to when the variable is not set (a port of its own
+# machine). ``required`` is False only for the stepper: without it the arms do not move but Brain still works.
+_BASE_URLS = {
+    item.variable: item
+    for item in (
+        UnsetBaseUrl("MICROPHONE_BASE_URL", "microphone", "http://127.0.0.1:8000", required=True),
+        UnsetBaseUrl("STT_BASE_URL", "stt", "http://127.0.0.1:8001", required=True),
+        UnsetBaseUrl("TTS_BASE_URL", "tts", "http://127.0.0.1:8002", required=True),
+        UnsetBaseUrl("SPEAKER_BASE_URL", "speaker", "http://127.0.0.1:8003", required=True),
+        UnsetBaseUrl("AI_AGENT_BASE_URL", "ai-agent", "http://127.0.0.1:7998", required=True),
+        UnsetBaseUrl("STEPPER_BASE_URL", "stepper", "http://127.0.0.1:8005", required=False),
+    )
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +62,8 @@ class AppConfig:
     echo_guard_seconds: float = 0.5
     wake_answer_seconds: float = 45.0
     stt_gate_path_prefix: str = "/gate"
+    # The base URLs that are not set (they fell back to the default below): named in the log, refused in staging/production.
+    unset_base_urls: tuple[UnsetBaseUrl, ...] = ()
 
 
 def load_config() -> AppConfig:
@@ -56,7 +74,7 @@ def load_config() -> AppConfig:
         service_port=_int_env("SERVICE_PORT", 7999),
         provider_name=os.getenv("PROVIDER_NAME", "local"),
         provider_timeout_seconds=_float_env("PROVIDER_TIMEOUT_SECONDS", 30.0),
-        microphone_base_url=_base_url("MICROPHONE_BASE_URL", "http://127.0.0.1:8000"),
+        microphone_base_url=_base_url("MICROPHONE_BASE_URL", _BASE_URLS["MICROPHONE_BASE_URL"].default),
         microphone_stream_endpoint=_endpoint(
             "MICROPHONE_STREAM_ENDPOINT",
             "http://127.0.0.1:8000/stream",
@@ -72,7 +90,7 @@ def load_config() -> AppConfig:
             "http://127.0.0.1:8000/stop",
             "/stop",
         ),
-        stt_base_url=_base_url("STT_BASE_URL", "http://127.0.0.1:8001"),
+        stt_base_url=_base_url("STT_BASE_URL", _BASE_URLS["STT_BASE_URL"].default),
         stt_set_stream_endpoint=_endpoint(
             "STT_SET_STREAM_ENDPOINT",
             "http://127.0.0.1:8001/process/stream/set",
@@ -88,7 +106,7 @@ def load_config() -> AppConfig:
             "http://127.0.0.1:8001/process/batch",
             "/process/batch",
         ),
-        tts_base_url=_base_url("TTS_BASE_URL", "http://127.0.0.1:8002"),
+        tts_base_url=_base_url("TTS_BASE_URL", _BASE_URLS["TTS_BASE_URL"].default),
         tts_set_stream_endpoint=_endpoint(
             "TTS_SET_STREAM_ENDPOINT",
             "http://127.0.0.1:8002/process/stream/set",
@@ -99,14 +117,14 @@ def load_config() -> AppConfig:
             "http://127.0.0.1:8002/process/stream/get",
             "/process/stream/get",
         ),
-        speaker_base_url=_base_url("SPEAKER_BASE_URL", "http://127.0.0.1:8003"),
+        speaker_base_url=_base_url("SPEAKER_BASE_URL", _BASE_URLS["SPEAKER_BASE_URL"].default),
         speaker_play_stream_endpoint=_endpoint(
             "SPEAKER_PLAY_STREAM_ENDPOINT",
             "http://127.0.0.1:8003/process/stream/set",
             "/process/stream/set",
             fallback_env_name="SPEAKER_STREAM_ENDPOINT",
         ),
-        ai_agent_base_url=_base_url("AI_AGENT_BASE_URL", "http://127.0.0.1:7998"),
+        ai_agent_base_url=_base_url("AI_AGENT_BASE_URL", _BASE_URLS["AI_AGENT_BASE_URL"].default),
         # ai-agent identifies every utterance and answers it with one of its flows. Whether it words a short spoken
         # line when a movement goes ahead ("Turning my left arm 90 degrees") is decided here: with false a movement
         # is silent (a refusal or a question is always said).
@@ -114,7 +132,7 @@ def load_config() -> AppConfig:
         # What Brain says while the flows work: at once when an utterance arrives, then every N seconds.
         progress_received_message=_text_env("PROGRESS_RECEIVED_MESSAGE", "Message received."),
         progress_thinking_message=_text_env("PROGRESS_THINKING_MESSAGE", "Thinking."),
-        progress_thinking_interval_seconds=_float_env("PROGRESS_THINKING_INTERVAL_SECONDS", 2.0),        stepper_base_url=_base_url("STEPPER_BASE_URL", "http://127.0.0.1:8005"),
+        progress_thinking_interval_seconds=_float_env("PROGRESS_THINKING_INTERVAL_SECONDS", 2.0),        stepper_base_url=_base_url("STEPPER_BASE_URL", _BASE_URLS["STEPPER_BASE_URL"].default),
         # A path template, not a fixed endpoint: {stepper_id} is filled in per call, so this does
         # not go through _endpoint()'s full-URL normalization.
         stepper_rotate_endpoint_template=os.getenv("STEPPER_ROTATE_ENDPOINT_TEMPLATE", "/control/{stepper_id}/rotate"),
@@ -138,7 +156,12 @@ def load_config() -> AppConfig:
         echo_guard_seconds=_float_env("ECHO_GUARD_SECONDS", 0.5),
         wake_use_gate_stt=_bool_env("WAKE_USE_GATE_STT", True),
         stt_gate_path_prefix=_text_env("STT_GATE_PATH_PREFIX", "/gate").rstrip("/"),
+        unset_base_urls=_unset_base_urls(),
     )
+
+
+def _unset_base_urls() -> tuple[UnsetBaseUrl, ...]:
+    return tuple(item for name, item in _BASE_URLS.items() if not os.getenv(name))
 
 
 def _int_env(name: str, default: int) -> int:

@@ -73,13 +73,13 @@ Every business rule lives in `domain/` (standard library only): the flow chain, 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Brain is alive |
-| `GET` | `/integrations/health` | Microphone, STT, TTS, speaker availability: `data = {all_available, services: [{name, is_available, detail}]}` |
+| `GET` | `/integrations/health` | Microphone, STT, TTS, speaker availability: `data = {all_available, services: [{name, is_available, detail}]}`; `detail` is `healthy and available`, or `healthy and available, warning: <reason>` for a simulated or fallback service |
 | `POST` | `/stt/batch?sample_rate=16000` | Body: raw PCM; returns `{text}` |
 | `POST` | `/tts/play?sample_rate=24000&channels=1` | Body: UTF-8 text; synthesizes and plays it; returns `{success}` |
 | `POST` | `/voice/transcribe` | Query `sample_rate` (16000), `chunk_size` (1024), `max_segments` (1); returns `{segments}`. Silence detection is the microphone service's (`MICROPHONE_SILENCE_*`) |
 | `POST` | `/voice/pipeline` | Query `microphone_sample_rate` (16000), `microphone_chunk_size` (1024), `max_text_segments` (0), `tts_sample_rate` (24000), `speaker_channels` (1). Starts a pipeline as a background task and returns `{"started": true}` at once |
 
-Answers use the envelope `action / status / status_code / message / timestamp / data`; errors use `status: "error"` and `data: null`. Failures are `502` when an external service failed (`BrainMicroserviceError`) and `500` otherwise. Invalid pipeline settings fail before any stream opens (a `ValueError` naming the field, `500` on `/voice/pipeline`). There is no authentication.
+Answers use the envelope `action / status / status_code / message / timestamp / data`; errors use `status: "error"` and `data: null`. Failures are `502` when an external service failed (`BrainMicroserviceError`) and `500` otherwise. Invalid pipeline settings fail before any stream opens (a `ValueError` naming the field, `500` on `/voice/pipeline`). There is no authentication. The microphone allows one stream at a time and Brain's startup voice pipeline holds it, so while that pipeline runs `POST /voice/transcribe` answers `502` (`microphone: HTTP 409 ... already started`) and a second `POST /voice/pipeline` starts but fails at once for the same reason (seen in the real run of T08-S08).
 
 ### Stream contract
 
@@ -116,14 +116,14 @@ The SET and GET streams are opened during setup, before anyone speaks. The pipel
 ## 6. Startup flow
 
 1. The selected VS Code launch profile's environment is applied when available (`.vscode/launch.json`).
-2. A local `.env` is loaded when no launch profile was selected.
-3. Config is parsed (`composition_root/config.py`), logging is initialised (`init_logging("brain", environment=...)`).
+2. A local `.env` is loaded when no launch profile was selected: it is searched upward from `composition_root/setup/` (so the service folder first), a variable already in the process environment wins over the file, and a selected launch profile skips the file. `.vscode/launch.json` is tracked in git, so a deployed clone has it; since 2026-11-11 (Q02) Brain applies a launch profile only when `VSCODE_LAUNCH_PROFILE` is already in the process environment (VS Code sets it for every profile; a deployed process does not), so there `.env` is loaded normally and its `APP_ENV` is honoured. Tests: `tests/mock/composition_root/test_environment.py`. Tests: `tests/mock/composition_root/test_dotenv_loading.py`.
+3. Config is parsed (`composition_root/config.py`), logging is initialised (`init_logging("brain", environment=...)`), every unset `*_BASE_URL` is warned about (refused in staging/production, section 7).
 4. Outbound HTTP adapters are created.
-5. **Startup preflight** polls microphone, STT, TTS and speaker health until all are ready, or the timeout expires (Brain then exits with `StartupPreflightError`).
+5. **Startup preflight** polls microphone, STT, TTS and speaker health until all are ready, or the timeout expires (Brain then exits with `StartupPreflightError`, exit code 1). A service that is available but says it is not the real thing (`reason` of its `/available`: microphone `sim`, speaker `null sink`, tts `pyttsx3 fallback`) passes, with one `warning` in the log (`microservice is available but not the real thing`, fields `integration` and `reason`).
 6. A session per ai-agent flow is attempted (best-effort).
 7. The mandatory startup voice pipeline starts in the background.
 8. FastAPI routes are registered and uvicorn serves.
-9. Shutdown cancels the background tasks, stops the microphone through its API, ends the agent sessions and closes the HTTP clients.
+9. Shutdown cancels the background tasks, stops the microphone through its API, ends the agent sessions and closes the HTTP clients. It is bounded so it fits the 10 s of `docker stop`: uvicorn waits at most 4 s for open requests (`timeout_graceful_shutdown`), and each of the two calls to another service during the cleanup at most 2 s (4 + 2 + 2 = 8 s, measured in Docker) (constants in `composition_root/setup/setup.py`, no setting); a timeout or a failure is logged and the cleanup goes on.
 
 ## 7. Configuration
 
@@ -164,11 +164,11 @@ Environment variables (process environment, then the selected VS Code launch pro
 | `STEPPER_LEFT_ARM_STEPPER_ID` / `STEPPER_RIGHT_ARM_STEPPER_ID` | `stepper_1` / `stepper_2` | Which stepper id is the left/right arm |
 | `STEPPER_DEFAULT_RPM` | `15` | Speed of every movement (a directive carries none) |
 | `STARTUP_PREFLIGHT_ENABLED` | `true` | Wait for the services at startup |
-| `STARTUP_PREFLIGHT_TIMEOUT_SECONDS` | `60` | Preflight timeout |
+| `STARTUP_PREFLIGHT_TIMEOUT_SECONDS` | `60` | Preflight timeout. When the preflight times out Brain EXITS with code 1 (`StartupPreflightError`); it never waits forever. Docker restarts it (`docker run --restart unless-stopped`, set by the deploy tool); a native Brain is restarted by nothing, so start it AFTER the other services (measured in Docker with a 10 s timeout and no dependency running: exit code 1 after 11.9 s, restarted 0.5 s later, about 12.5 s per cycle, healthy 3.2 s after the dependencies came up; the tool starts the services of other machines first, `wait_for_remotes`, and then Brain) or let autostart bring it up again. |
 | `MICROSERVICE_READY_POLL_INTERVAL_SECONDS` | `2` | Preflight poll interval |
 | `RUN_LIVE_MICROSERVICE_TESTS` | `0` | Test-only switch: `1` runs `tests/live` |
 
-`LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT`, `SERVICE_NAME` and `TRACE_EXPORT_*` are read by the shared logging package, not by Brain's config: see [`shared-logging/docs/logging.md`](../shared-logging/docs/logging.md). The `127.0.0.1` defaults only suit a single machine: on a multi-machine layout set every `*_BASE_URL` explicitly (the `deployment` tool does this from the layout in `deployment/config/`).
+`LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT`, `SERVICE_NAME` and `TRACE_EXPORT_*` are read by the shared logging package, not by Brain's config: see [`shared-logging/docs/logging.md`](../shared-logging/docs/logging.md). The `127.0.0.1` defaults only suit a single machine: on a multi-machine layout set every `*_BASE_URL` explicitly (the `deployment` tool does this from the layout in `deployment/config/`). A `*_BASE_URL` that is not set (or empty) is **never silent**: Brain logs one warning per variable (`base url not set; using the default on this machine`, with `variable`, `integration` and `default`), and when `APP_ENV` is `staging` or `production` an unset microphone, STT, TTS, speaker or ai-agent URL stops the start with one `BaseUrlsNotSetError` naming all of them (the stepper stays a warning: it is optional). `APP_ENV` is `development` unless it is set (the deploy tool does not set it), so on a deployed robot the warning is what you see.
 
 ## 8. Environment and logs
 
@@ -177,7 +177,8 @@ Logging is the shared `shared_logging` package (JSON lines with `trace_id`, `ser
 ## 9. Run
 
 ```powershell
-& windows\Scripts\python.exe -m pip install -r requirements.windows.txt
+& windows\Scripts\python.exe -m pip install -r requirements.windows.txt   # runtime only, exact pins
+& windows\Scripts\python.exe -m pip install -r requirements-dev.txt       # tests (pytest, pytest-asyncio) and debugpy
 & windows\Scripts\python.exe main.py        # start microphone, STT, TTS and speaker first (the preflight waits for them)
 ```
 
@@ -197,7 +198,7 @@ curl -X POST "http://<brain-host>:7999/voice/pipeline"
 & windows\Scripts\python.exe -m pytest ..\contracts\tests -q   # from the workspace root: contract tests + e2e with fake hardware
 ```
 
-Result on 2026-10-01: `360 passed, 14 skipped` in 7.8 s (374 collected; the 14 skipped are the live tests). `contracts/tests` (including `test_brain_ai_agent_flows.py`, Brain's real composition root against a real ai-agent process with a scripted LLM): `57 passed, 20 skipped`. Live tests need real services and were not run. Each folder under `tests/` has a README.
+Result on 2026-11-11: `520 passed, 14 skipped` in 18.3 s (the deployment plan added 38 tests). Result on 2026-10-01: `360 passed, 14 skipped` in 7.8 s (374 collected; the 14 skipped are the live tests). `contracts/tests` (including `test_brain_ai_agent_flows.py`, Brain's real composition root against a real ai-agent process with a scripted LLM): `57 passed, 20 skipped`. Live tests need real services and were not run. Each folder under `tests/` has a README.
 
 ## 11. Repository map
 

@@ -41,6 +41,7 @@ def test_resolve_runtime_environment_defaults_to_development_for_invalid_value(m
 
 
 def test_apply_launch_environment_uses_profile_env_over_env_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VSCODE_LAUNCH_PROFILE", "Python: Run (staging env)")  # VS Code sets it for a launch
     env_file = tmp_path / ".env"
     env_file.write_text("APP_ENV=development\nSERVICE_PORT=8005\n", encoding="utf-8")
     launch_dir = tmp_path / ".vscode"
@@ -72,6 +73,7 @@ def test_apply_launch_environment_uses_profile_env_over_env_file(tmp_path: Path,
 
 
 def test_apply_launch_environment_keeps_process_environment_highest_precedence(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VSCODE_LAUNCH_PROFILE", "Python: Run (staging env)")
     monkeypatch.setenv("APP_ENV", "production")
     env_file = tmp_path / ".env"
     env_file.write_text("APP_ENV=development\nSERVICE_PORT=8005\n", encoding="utf-8")
@@ -96,3 +98,53 @@ def test_apply_launch_environment_keeps_process_environment_highest_precedence(t
     apply_launch_environment(tmp_path)
 
     assert os.environ["APP_ENV"] == "production"
+
+
+def _launch_json_with_a_development_profile(folder: Path) -> None:
+    (folder / ".vscode").mkdir()
+    (folder / ".vscode" / "launch.json").write_text(
+        json.dumps(
+            {
+                "configurations": [
+                    {
+                        "name": "Python: Debug (development env)",
+                        "env": {"APP_ENV": "development", "VSCODE_LAUNCH_PROFILE": "Python: Debug (development env)"},
+                        "envFile": "${workspaceFolder}/.env",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_deployed_clone_has_a_launch_json_but_no_profile_is_applied(tmp_path: Path, monkeypatch) -> None:
+    # `.vscode/launch.json` is tracked in git, so a deployed clone has it; nothing in a deployed process sets
+    # VSCODE_LAUNCH_PROFILE, so the file must be ignored (Q02): `.env` keeps its APP_ENV and is loaded by setup().
+    _launch_json_with_a_development_profile(tmp_path)
+    (tmp_path / ".env").write_text("APP_ENV=production\nSERVICE_PORT=8005\n", encoding="utf-8")
+
+    summary = apply_launch_environment(tmp_path)
+
+    assert summary.selected_profile is None and summary.env_file is None
+    assert (summary.env_file_variables_loaded, summary.profile_variables_loaded) == (0, 0)
+    assert "APP_ENV" not in os.environ and "SERVICE_PORT" not in os.environ
+
+
+def test_an_empty_launch_profile_variable_counts_as_not_set(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VSCODE_LAUNCH_PROFILE", "")
+    _launch_json_with_a_development_profile(tmp_path)
+
+    assert apply_launch_environment(tmp_path).selected_profile is None
+    assert "APP_ENV" not in os.environ
+
+
+def test_a_vscode_launch_still_applies_its_profile(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VSCODE_LAUNCH_PROFILE", "Python: Debug (development env)")
+    _launch_json_with_a_development_profile(tmp_path)
+    (tmp_path / ".env").write_text("SERVICE_PORT=8005\n", encoding="utf-8")
+
+    summary = apply_launch_environment(tmp_path)
+
+    assert summary.selected_profile == "Python: Debug (development env)"
+    assert os.environ["APP_ENV"] == "development" and os.environ["SERVICE_PORT"] == "8005"

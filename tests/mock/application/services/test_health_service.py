@@ -59,3 +59,20 @@ async def test_an_available_route_that_fails_is_unavailable() -> None:
     client, _ = _client({"/health": httpx.Response(200), "/available": httpx.Response(404)})
 
     assert (await client.check_health()).detail == "available: HTTP 404"
+
+
+@pytest.mark.asyncio
+async def test_an_available_service_with_a_reason_is_available_with_a_warning_in_the_detail() -> None:
+    client, _ = _client({"/health": httpx.Response(200), "/available": _available(True, "null sink")})
+
+    result = await client.check_health()
+
+    assert result.is_available is True
+    assert result.detail == "healthy and available, warning: null sink"
+
+
+@pytest.mark.asyncio
+async def test_an_available_service_without_a_reason_keeps_the_plain_detail() -> None:
+    client, _ = _client({"/health": httpx.Response(200), "/available": _available(True, None)})
+
+    assert (await client.check_health()).detail == "healthy and available"

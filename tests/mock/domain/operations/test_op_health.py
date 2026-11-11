@@ -24,3 +24,26 @@ def test_the_problem_is_the_message_the_startup_preflight_reports_today() -> Non
     # `composition_root/setup/preflight.py` builds: "; ".join(f"{status.name}: {status.detail}" ...)
     expected = "; ".join(f"{s.name}: {s.detail}" for s in [STT_DOWN, TTS_DOWN])
     assert readiness_problem([UP, STT_DOWN, TTS_DOWN]) == expected
+
+def test_an_available_service_with_a_reason_says_so_in_its_detail() -> None:
+    from domain.operations.health import available_detail
+
+    assert available_detail(None) == "healthy and available"
+    assert available_detail("") == "healthy and available"
+    assert available_detail("null sink") == "healthy and available, warning: null sink"
+
+
+def test_the_warnings_are_the_available_services_that_carry_a_reason_in_order() -> None:
+    from domain.operations.health import warnings
+
+    sim = ServiceStatus("microphone", True, "healthy and available, warning: sim")
+    null_sink = ServiceStatus("speaker", True, "healthy and available, warning: null sink")
+
+    assert warnings([sim, UP, STT_DOWN, null_sink]) == [("microphone", "sim"), ("speaker", "null sink")]
+    assert warnings([UP, STT_DOWN]) == []
+
+
+def test_an_unavailable_service_is_a_problem_not_a_warning_even_if_its_text_looks_like_one() -> None:
+    from domain.operations.health import warnings
+
+    assert warnings([ServiceStatus("tts", False, "available: x, warning: y")]) == []

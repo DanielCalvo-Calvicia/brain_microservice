@@ -3,7 +3,7 @@ import asyncio
 from application.services.brain_service import BrainService
 from composition_root.config import AppConfig
 from shared_logging import get_logger
-from domain.operations.health import readiness_problem
+from domain.operations.health import readiness_problem, warnings
 
 logger = get_logger(__name__)
 
@@ -50,6 +50,8 @@ async def _wait_until_microservices_are_ready(service: BrainService, config: App
         health = await service.check_integrations()
         problem = readiness_problem(health.services)
         if problem is None:
+            for name, reason in warnings(health.services):
+                logger.warning("microservice is available but not the real thing", integration=name, reason=reason)
             logger.info("all external microservices are active and ready", attempts=attempt)
             return
 

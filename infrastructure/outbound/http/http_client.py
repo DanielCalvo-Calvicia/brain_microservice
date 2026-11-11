@@ -13,6 +13,7 @@ from contracts.stream.common.base import BaseEvent, ContractViolation, EventType
 from application.dtos.outbound_dtos import ExternalHealthResponseDto
 from infrastructure.outbound.http.byte_streams import open_byte_stream
 from shared_logging import async_event_hooks, get_logger
+from domain.operations.health import available_detail
 from domain.errors import (
     ExternalServiceAuthenticationError,
     ExternalServiceInvalidResponseError,
@@ -58,7 +59,7 @@ class HttpServiceClient:
             availability = self._data_as(response, AvailabilityResponse)
             if not availability.is_available:
                 return ExternalHealthResponseDto(False, f"available: {availability.reason or 'not available'}")
-            return ExternalHealthResponseDto(True, "healthy and available")
+            return ExternalHealthResponseDto(True, available_detail(availability.reason))
         except httpx.TimeoutException as exc:
             logger.error("health request timed out", service=self._config.service_name, error=str(exc))
             raise ExternalServiceTimeoutError(self._config.service_name, str(exc)) from exc

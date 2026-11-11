@@ -2,6 +2,10 @@ class BrainMicroserviceError(Exception):
     """Base error for master orchestration failures."""
 
 
+class BaseUrlsNotSetError(BrainMicroserviceError):
+    """Brain refuses to start: a base URL of a service is not set in an environment that is deployed."""
+
+
 class ExternalServiceError(BrainMicroserviceError):
     def __init__(self, service_name: str, message: str) -> None:
         super().__init__(f"{service_name}: {message}")

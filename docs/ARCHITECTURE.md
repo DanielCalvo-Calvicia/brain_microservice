@@ -113,3 +113,18 @@ does the calls and the mapping. Movements the user asked for run through `move_a
   its config in `composition_root`, and a base URL variable in `.env.example`.
 - **A new rule**: a value object, entity or operation in `domain/` with a test in `tests/mock/domain/`, then call it from the
   application. The test file base name must be unique (prefix `test_vo_`, `test_entity_`, `test_op_`).
+
+## Decisions (deployment plan, Part B of docs/tasks)
+
+Answered by the maintainer on 2026-11-10 in [Q01](questionnaires/Q01_before-the-deployment-tasks.md) (all nine: the recommended answer).
+
+1. A missing `*_BASE_URL`: warn always, refuse in `staging` and `production` (microphone, STT, TTS, speaker, ai-agent; the stepper stays a warning). The deploy tool is not changed.
+2. The start-up preflight keeps its exit (code 1 on timeout). Docker's `--restart unless-stopped`, the tool's start order and `wait_for_remotes` are the restart policy.
+3. A simulated or fallback service is shown: a warning in the log and `healthy and available, warning: <reason>` in `/integrations/health`; `is_available` does not change.
+4. Docker is proven with Brain in a container (through the tool, from a scratch copy) and its dependencies as real processes on the PC, reached through `host.docker.internal`.
+5. No motor is moved in this plan; the stepper is a stand-in. A real run is a manual task started with "go".
+6. Runtime packages pinned with `==`; tests and `debugpy` in `requirements-dev.txt`.
+7. `.env` loading stays in `composition_root/setup/setup.py` (skipped when a launch profile is selected); tests added. *Premise corrected the same day: a deployed clone has `.vscode/launch.json` (tracked). Decision 10 (Q02, 2026-11-11) fixes it.*
+8. Bounded shutdown: `timeout_graceful_shutdown=4` and a 2 s bound on each cleanup call (4 + 2 + 2 = 8 s; first built as 5 and 3, which made 11 s and were killed by `docker stop` in the worst case of T10-S04), no new setting.
+9. Manual tasks: a "go" for each; warning before the microphone opens and before sound plays; arm64, Raspberry Pi and native Linux stay postponed.
+10. A launch profile (`.vscode/launch.json`) is applied only when `VSCODE_LAUNCH_PROFILE` is already in the process environment (Q02, answered 2026-11-11: Recommended). A deployed clone has the file but not the variable, so its `.env` loads normally and its `APP_ENV` is honoured; VS Code launches work as before.

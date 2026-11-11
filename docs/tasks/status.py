@@ -11,9 +11,9 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STATUS = re.compile(r"^Status:\s*(TODO|IN PROGRESS|DONE|BLOCKED)\b", re.M)
+STATUS = re.compile(r"^Status:\s*(TODO|IN PROGRESS|DONE|BLOCKED|AWAITING USER|POSTPONED)\b", re.M)
 TITLE = re.compile(r"^#\s*(T\d+-S\d+):\s*(.+)$", re.M)
-MARK = {"DONE": "[x]", "IN PROGRESS": "[~]", "BLOCKED": "[!]", "TODO": "[ ]"}
+MARK = {"DONE": "[x]", "IN PROGRESS": "[~]", "BLOCKED": "[!]", "TODO": "[ ]", "AWAITING USER": "[?]", "POSTPONED": "[-]"}
 
 
 def load():
@@ -44,15 +44,19 @@ def render(tasks):
         for s in subtasks:
             lines.append(f"  {MARK[s['status']]} {s['id']}  {s['title']}  [{s['status']}]  ->  docs/tasks/{s['file']}")
         lines.append("")
-    pending = [s for _, subs in tasks for s in subs if s["status"] != "DONE"]
+    pending = [s for _, subs in tasks for s in subs if s["status"] not in ("DONE", "POSTPONED")]
     total = sum(len(subs) for _, subs in tasks)
     lines.append(f"{total - len(pending)}/{total} subtasks done.")
     if pending:
         nxt = pending[0]
         lines.append(f"NEXT: {nxt['id']}  {nxt['title']}  [{nxt['status']}]  ->  docs/tasks/{nxt['file']}")
-        blocked = [s["id"] for s in pending if s["status"] == "BLOCKED"]
-        if blocked:
-            lines.append("BLOCKED: " + ", ".join(blocked))
+        for state in ("AWAITING USER", "BLOCKED"):
+            names = [s["id"] for s in pending if s["status"] == state]
+            if names:
+                lines.append(f"{state}: " + ", ".join(names))
+        postponed = [s["id"] for _, subs in tasks for s in subs if s["status"] == "POSTPONED"]
+        if postponed:
+            lines.append("POSTPONED: " + ", ".join(postponed))
     else:
         lines.append("Everything is done.")
     return "\n".join(lines)

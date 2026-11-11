@@ -1,0 +1,11 @@
+# Development tools: tests and the editor debugger. NOT installed by the deploy tool, which reads only
+# requirements.windows.txt / requirements.linux.txt (config/catalogue.toml of the deployment repo).
+# Install on top of the runtime file:
+#     pip install -r requirements.windows.txt   (requirements.linux.txt on Linux)
+#     pip install -r requirements-dev.txt
+
+pytest>=9.0.0
+pytest-asyncio>=1.3.0
+
+# Editor debugger (VS Code launch profiles); nothing in the service imports it
+debugpy>=1.8.0
